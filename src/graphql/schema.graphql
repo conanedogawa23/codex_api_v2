@@ -1,0 +1,536 @@
+"""
+Codex API v2 GraphQL Schema
+Complete schema for GitLab project management with MongoDB/Mongoose
+"""
+
+scalar DateTime
+scalar JSON
+
+# ==================== User Types ====================
+
+type User {
+  id: ID!
+  gitlabId: Int
+  name: String!
+  email: String!
+  username: String!
+  role: String!
+  department: String!
+  avatar: String
+  joinDate: DateTime!
+  status: UserStatus!
+  skills: [String!]!
+  assignedRepos: [String!]!
+  projects: [UserProject!]!
+  lastSynced: DateTime!
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum UserStatus {
+  active
+  inactive
+  on_leave
+}
+
+type UserProject {
+  id: String!
+  name: String!
+  role: String!
+}
+
+# ==================== Project Types ====================
+
+type Project {
+  id: ID!
+  gitlabId: Int!
+  name: String!
+  nameWithNamespace: String!
+  description: String
+  defaultBranch: String!
+  visibility: ProjectVisibility!
+  webUrl: String!
+  httpUrlToRepo: String!
+  sshUrlToRepo: String!
+  pathWithNamespace: String!
+  namespace: Namespace!
+  status: ProjectStatus!
+  progress: Int!
+  priority: Priority!
+  category: String!
+  department: String
+  deadline: DateTime
+  assignedTo: [ProjectAssignment!]!
+  tasks: TaskSummary!
+  budget: Budget
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  lastActivityAt: DateTime!
+  lastSynced: DateTime!
+  isActive: Boolean!
+}
+
+enum ProjectVisibility {
+  private
+  internal
+  public
+}
+
+enum ProjectStatus {
+  planned
+  active
+  completed
+  on_hold
+  cancelled
+}
+
+enum Priority {
+  low
+  medium
+  high
+  urgent
+}
+
+type Namespace {
+  id: Int!
+  name: String!
+  path: String!
+  kind: String!
+}
+
+type ProjectAssignment {
+  id: String!
+  name: String!
+  role: String!
+  department: String!
+}
+
+type TaskSummary {
+  total: Int!
+  completed: Int!
+  inProgress: Int!
+  pending: Int!
+}
+
+type Budget {
+  allocated: Float!
+  spent: Float!
+  currency: String!
+}
+
+# ==================== Issue Types ====================
+
+type Issue {
+  id: ID!
+  gitlabId: Int!
+  iid: Int!
+  projectId: Int!
+  title: String!
+  description: String
+  state: IssueState!
+  priority: Priority!
+  completionPercentage: Int!
+  tags: [String!]!
+  estimatedHours: Float
+  actualHours: Float
+  labels: [String!]!
+  milestone: Milestone
+  assignees: [GitLabUser!]!
+  author: GitLabUser!
+  webUrl: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  closedAt: DateTime
+  dueDate: DateTime
+  lastSynced: DateTime!
+  isActive: Boolean!
+}
+
+enum IssueState {
+  opened
+  closed
+}
+
+# ==================== Merge Request Types ====================
+
+type MergeRequest {
+  id: ID!
+  gitlabId: Int!
+  iid: Int!
+  projectId: Int!
+  title: String!
+  description: String
+  state: MergeRequestState!
+  mergeStatus: MergeStatus!
+  sourceBranch: String!
+  targetBranch: String!
+  labels: [String!]!
+  milestone: Milestone
+  assignees: [GitLabUser!]!
+  reviewers: [GitLabUser!]!
+  author: GitLabUser!
+  webUrl: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  mergedAt: DateTime
+  closedAt: DateTime
+  firstDeployedToProductionAt: DateTime
+  lastSynced: DateTime!
+  isActive: Boolean!
+}
+
+enum MergeRequestState {
+  opened
+  closed
+  locked
+  merged
+}
+
+enum MergeStatus {
+  can_be_merged
+  cannot_be_merged
+  unchecked
+}
+
+# ==================== GitLab User Type ====================
+
+type GitLabUser {
+  id: Int!
+  name: String!
+  username: String!
+  email: String
+  avatarUrl: String
+}
+
+# ==================== Milestone Type ====================
+
+type MilestoneReference {
+  id: Int!
+  title: String!
+  description: String
+  state: MilestoneState!
+  dueDate: DateTime
+}
+
+type Milestone {
+  id: ID!
+  gitlabId: Int!
+  projectId: String!
+  iid: Int!
+  title: String!
+  description: String
+  state: MilestoneState!
+  dueDate: DateTime
+  startDate: DateTime
+  webUrl: String!
+  issueIds: [ID!]!
+  mergeRequestIds: [ID!]!
+  createdBy: ID
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  lastSyncedAt: DateTime!
+  isDeleted: Boolean!
+}
+
+enum MilestoneState {
+  active
+  closed
+}
+
+# ==================== Pipeline Types ====================
+
+type Pipeline {
+  id: ID!
+  gitlabId: Int!
+  projectId: String!
+  ref: String!
+  sha: String!
+  status: PipelineStatus!
+  source: String!
+  beforeSha: String
+  tag: Boolean!
+  webUrl: String!
+  duration: Int
+  queuedDuration: Int
+  coverage: Float
+  userId: ID
+  jobIds: [ID!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  startedAt: DateTime
+  finishedAt: DateTime
+  committedAt: DateTime
+  lastSyncedAt: DateTime!
+  isDeleted: Boolean!
+}
+
+enum PipelineStatus {
+  created
+  waiting_for_resource
+  preparing
+  pending
+  running
+  success
+  failed
+  canceled
+  skipped
+  manual
+  scheduled
+}
+
+# ==================== Label Type ====================
+
+type Label {
+  id: ID!
+  gitlabId: Int!
+  projectId: String!
+  name: String!
+  color: String!
+  description: String
+  descriptionHtml: String
+  textColor: String
+  priority: Int
+  subscribed: Boolean!
+  openIssuesCount: Int!
+  closedIssuesCount: Int!
+  openMergeRequestsCount: Int!
+  isProjectLabel: Boolean!
+  webUrl: String
+  lastSyncedAt: DateTime!
+  isDeleted: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# ==================== Task Type ====================
+
+type Task {
+  id: ID!
+  gitlabIssueId: Int
+  title: String!
+  description: String
+  status: TaskStatus!
+  priority: Priority!
+  projectId: String!
+  assignedTo: TaskUser
+  assignedBy: TaskUser
+  dueDate: DateTime
+  completionPercentage: Int!
+  tags: [String!]!
+  comments: Int!
+  estimatedHours: Float
+  actualHours: Float
+  dependencies: [String!]!
+  subtasks: [String!]!
+  attachments: [Attachment!]!
+  lastSynced: DateTime!
+  isActive: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+  delayed
+  cancelled
+}
+
+type TaskUser {
+  id: String!
+  name: String!
+  email: String!
+}
+
+type Attachment {
+  name: String!
+  url: String!
+  type: String!
+}
+
+# ==================== Query Root ====================
+
+type Query {
+  # Health Check
+  health: HealthStatus!
+  
+  # User Queries
+  user(id: ID!): User
+  users(
+    status: UserStatus
+    department: String
+    limit: Int = 20
+    offset: Int = 0
+  ): [User!]!
+  userByEmail(email: String!): User
+  userByGitlabId(gitlabId: Int!): User
+  
+  # Project Queries
+  project(id: ID!): Project
+  projects(
+    status: ProjectStatus
+    priority: Priority
+    department: String
+    category: String
+    limit: Int = 20
+    offset: Int = 0
+  ): [Project!]!
+  projectByGitlabId(gitlabId: Int!): Project
+  overdueProjects: [Project!]!
+  
+  # Issue Queries
+  issue(id: ID!): Issue
+  issues(
+    projectId: Int
+    state: IssueState
+    priority: Priority
+    assigneeId: Int
+    limit: Int = 20
+    offset: Int = 0
+  ): [Issue!]!
+  issueByGitlabId(gitlabId: Int!): Issue
+  overdueIssues: [Issue!]!
+  
+  # Merge Request Queries
+  mergeRequest(id: ID!): MergeRequest
+  mergeRequests(
+    projectId: Int
+    state: MergeRequestState
+    authorId: Int
+    limit: Int = 20
+    offset: Int = 0
+  ): [MergeRequest!]!
+  mergeRequestByGitlabId(gitlabId: Int!): MergeRequest
+  
+  # Milestone Queries
+  milestone(id: ID!): Milestone
+  milestones(
+    projectId: String
+    state: MilestoneState
+    limit: Int = 20
+    offset: Int = 0
+  ): [Milestone!]!
+  
+  # Pipeline Queries
+  pipeline(id: ID!): Pipeline
+  pipelines(
+    projectId: String
+    status: PipelineStatus
+    ref: String
+    limit: Int = 20
+    offset: Int = 0
+  ): [Pipeline!]!
+  
+  # Label Queries
+  label(id: ID!): Label
+  labels(
+    projectId: String
+    limit: Int = 20
+    offset: Int = 0
+  ): [Label!]!
+  
+  # Task Queries
+  task(id: ID!): Task
+  tasks(
+    projectId: String
+    status: TaskStatus
+    priority: Priority
+    assignedToId: String
+    limit: Int = 20
+    offset: Int = 0
+  ): [Task!]!
+  overdueTasks: [Task!]!
+}
+
+# ==================== Mutation Root ====================
+
+type Mutation {
+  # User Mutations
+  updateUser(id: ID!, input: UpdateUserInput!): User
+  addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): User
+  removeUserProject(id: ID!, projectId: String!): User
+  
+  # Project Mutations
+  updateProject(id: ID!, input: UpdateProjectInput!): Project
+  updateProjectProgress(id: ID!, progress: Int!): Project
+  assignUserToProject(projectId: ID!, userId: String!, userName: String!, role: String!, department: String!): Project
+  unassignUserFromProject(projectId: ID!, userId: String!): Project
+  
+  # Issue Mutations
+  updateIssue(id: ID!, input: UpdateIssueInput!): Issue
+  updateIssueProgress(id: ID!, percentage: Int!): Issue
+  addIssueTag(id: ID!, tag: String!): Issue
+  removeIssueTag(id: ID!, tag: String!): Issue
+  
+  # Task Mutations
+  createTask(input: CreateTaskInput!): Task
+  updateTask(id: ID!, input: UpdateTaskInput!): Task
+  updateTaskProgress(id: ID!, percentage: Int!): Task
+  addTaskTag(id: ID!, tag: String!): Task
+  removeTaskTag(id: ID!, tag: String!): Task
+  deleteTask(id: ID!): Boolean!
+}
+
+# ==================== Input Types ====================
+
+input UpdateUserInput {
+  role: String
+  department: String
+  status: UserStatus
+  skills: [String!]
+}
+
+input UpdateProjectInput {
+  status: ProjectStatus
+  priority: Priority
+  category: String
+  department: String
+  deadline: DateTime
+  progress: Int
+}
+
+input UpdateIssueInput {
+  priority: Priority
+  completionPercentage: Int
+  estimatedHours: Float
+  actualHours: Float
+}
+
+input CreateTaskInput {
+  title: String!
+  description: String
+  status: TaskStatus
+  priority: Priority
+  projectId: String!
+  dueDate: DateTime
+  estimatedHours: Float
+  tags: [String!]
+}
+
+input UpdateTaskInput {
+  title: String
+  description: String
+  status: TaskStatus
+  priority: Priority
+  dueDate: DateTime
+  completionPercentage: Int
+  estimatedHours: Float
+  actualHours: Float
+}
+
+# ==================== Health Status ====================
+
+type HealthStatus {
+  status: String!
+  timestamp: DateTime!
+  database: DatabaseStatus!
+  version: String!
+}
+
+type DatabaseStatus {
+  status: String!
+  responseTime: Int!
+}
+

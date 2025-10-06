@@ -1,0 +1,61 @@
+{
+  "name": "codex-api-v2",
+  "version": "2.0.0",
+  "description": "Codex API v2 - GraphQL API with TypeScript, MongoDB/Mongoose",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon --exec ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist",
+    "rover:check": "rover graph check --schema ./src/graphql/schema.graphql",
+    "rover:publish": "rover graph publish --schema ./src/graphql/schema.graphql"
+  },
+  "keywords": [
+    "codex",
+    "api",
+    "graphql",
+    "typescript",
+    "mongoose",
+    "mongodb",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "apollo-server-express": "^3.12.1",
+    "class-validator": "^0.14.0",
+    "cors": "^2.8.5",
+    "dataloader": "^2.2.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "graphql": "^16.8.1",
+    "graphql-modules": "^2.3.0",
+    "graphql-scalars": "^1.24.2",
+    "graphql-tag": "^2.12.6",
+    "graphql-tools": "^9.0.1",
+    "graphql-type-json": "^0.3.2",
+    "helmet": "^7.1.0",
+    "mongoose": "^7.6.3",
+    "reflect-metadata": "^0.1.14",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@apollo/rover": "^0.24.0",
+    "@types/cors": "^2.8.15",
+    "@types/express": "^4.17.20",
+    "@types/node": "^20.8.7",
+    "@typescript-eslint/eslint-plugin": "^6.9.0",
+    "@typescript-eslint/parser": "^6.9.0",
+    "eslint": "^8.52.0",
+    "nodemon": "^3.0.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
