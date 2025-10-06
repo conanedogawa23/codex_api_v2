@@ -288,7 +288,7 @@ ProjectSchema.methods.updateTaskSummary = function(taskSummary: { total: number;
 
 // Instance method to assign user
 ProjectSchema.methods.assignUser = function(userId: string, userName: string, role: string, department: string) {
-  const existingAssignment = this.assignedTo.find((assignment: any) => assignment.id === userId);
+  const existingAssignment = this.assignedTo.find((assignment: { id: string; name: string; role: string; department: string }) => assignment.id === userId);
   if (!existingAssignment) {
     this.assignedTo.push({ id: userId, name: userName, role, department });
     return this.save();
@@ -298,7 +298,7 @@ ProjectSchema.methods.assignUser = function(userId: string, userName: string, ro
 
 // Instance method to unassign user
 ProjectSchema.methods.unassignUser = function(userId: string) {
-  this.assignedTo = this.assignedTo.filter((assignment: any) => assignment.id !== userId);
+  this.assignedTo = this.assignedTo.filter((assignment: { id: string; name: string; role: string; department: string }) => assignment.id !== userId);
   return this.save();
 };
 

@@ -249,7 +249,8 @@ All configuration via `.env`:
 - `GRAPHQL_PLAYGROUND` - Enable/disable playground
 - `GRAPHQL_INTROSPECTION` - Enable/disable introspection
 - `LOG_LEVEL` - Logging level
-- `ALLOWED_ORIGINS` - CORS allowed origins
+
+**CORS**: Allows all origins by default (`*`)
 
 ---
 

@@ -182,11 +182,6 @@ GRAPHQL_INTROSPECTION=true
 
 # Logging (optional)
 LOG_LEVEL=info
-
-# CORS Configuration (optional - defaults to allow all in development)
-# Comma-separated origins, or use * to allow all origins
-# ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
-# ALLOWED_ORIGINS=*
 ```
 
 ### Environment Variables Reference
@@ -199,7 +194,8 @@ LOG_LEVEL=info
 | `GRAPHQL_PLAYGROUND` | Enable GraphQL Playground | true | No |
 | `GRAPHQL_INTROSPECTION` | Enable schema introspection | true | No |
 | `LOG_LEVEL` | Logging level (error/warn/info/debug) | info | No |
-| `ALLOWED_ORIGINS` | CORS allowed origins (comma-separated or *) | All origins in dev | No |
+
+**Note**: CORS is configured to allow all origins (`*`). See `docs/CORS_CONFIGURATION.md` for details.
 
 ## 📖 API Documentation
 

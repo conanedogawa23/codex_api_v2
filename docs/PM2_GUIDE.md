@@ -348,7 +348,6 @@ MONGODB_URI=mongodb://your-production-server:27017/codex_api_v2
 GRAPHQL_PLAYGROUND=false
 GRAPHQL_INTROSPECTION=false
 LOG_LEVEL=warn
-ALLOWED_ORIGINS=https://your-frontend.com
 ```
 
 ### 3. Start with PM2

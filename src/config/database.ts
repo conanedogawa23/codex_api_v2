@@ -16,7 +16,6 @@ export class DatabaseConfig {
 
   public async connect(mongoUri: string): Promise<void> {
     if (this.isConnected) {
-      logger.info('Database already connected');
       return;
     }
 
@@ -29,7 +28,7 @@ export class DatabaseConfig {
       });
 
       this.isConnected = true;
-      logger.info('✅ MongoDB connected successfully');
+      logger.info('MongoDB connected');
 
       // Handle connection events
       mongoose.connection.on('error', (error) => {
@@ -42,13 +41,8 @@ export class DatabaseConfig {
         this.isConnected = false;
       });
 
-      mongoose.connection.on('reconnected', () => {
-        logger.info('MongoDB reconnected');
-        this.isConnected = true;
-      });
-
     } catch (error) {
-      logger.error('Failed to connect to MongoDB:', error);
+      logger.error('MongoDB connection failed:', error);
       this.isConnected = false;
       throw error;
     }
@@ -62,9 +56,8 @@ export class DatabaseConfig {
     try {
       await mongoose.disconnect();
       this.isConnected = false;
-      logger.info('MongoDB disconnected gracefully');
     } catch (error) {
-      logger.error('Error disconnecting from MongoDB:', error);
+      logger.error('MongoDB disconnect error:', error);
       throw error;
     }
   }

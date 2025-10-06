@@ -1,5 +1,11 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+// Static method interfaces
+interface IIssueModel extends mongoose.Model<IIssue> {
+  findByGitlabId(gitlabId: number): Promise<IIssue | null>;
+  findOverdue(): Promise<IIssue[]>;
+}
+
 export interface IIssue extends Document {
   gitlabId: number;
   iid: number;
@@ -245,4 +251,4 @@ IssueSchema.statics.findOverdue = function() {
   });
 };
 
-export const Issue = mongoose.model<IIssue>('Issue', IssueSchema);
+export const Issue = mongoose.model<IIssue, IIssueModel>('Issue', IssueSchema);

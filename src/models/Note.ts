@@ -16,7 +16,7 @@ export interface INote extends Document {
   confidential: boolean;
   internal: boolean;
   type?: string;
-  position?: any;
+  position?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
   lastSyncedAt: Date;

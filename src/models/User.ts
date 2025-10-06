@@ -157,7 +157,7 @@ UserSchema.methods.updateSyncTimestamp = function() {
 
 // Instance method to add project assignment
 UserSchema.methods.addProject = function(projectId: string, projectName: string, role: string) {
-  const existingProject = this.projects.find((p: any) => p.id === projectId);
+  const existingProject = this.projects.find((p: { id: string; name: string; role: string }) => p.id === projectId);
   if (!existingProject) {
     this.projects.push({ id: projectId, name: projectName, role });
     return this.save();
@@ -167,7 +167,7 @@ UserSchema.methods.addProject = function(projectId: string, projectName: string,
 
 // Instance method to remove project assignment
 UserSchema.methods.removeProject = function(projectId: string) {
-  this.projects = this.projects.filter((p: any) => p.id !== projectId);
+  this.projects = this.projects.filter((p: { id: string; name: string; role: string }) => p.id !== projectId);
   return this.save();
 };
 

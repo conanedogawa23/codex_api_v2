@@ -72,12 +72,10 @@ class Server {
 
     await this.apolloServer.start();
     this.apolloServer.applyMiddleware({
-      app: this.app,
+      app: this.app as any, // Type assertion needed due to Express version mismatch
       path: '/graphql',
       cors: false, // We're handling CORS at the app level
     });
-
-    logger.info(`✅ GraphQL endpoint: /graphql (Modular Architecture)`);
   }
 
   private setupRoutes(): void {
@@ -128,8 +126,6 @@ class Server {
     try {
       const config = environment.get();
 
-      logger.info('🚀 Starting Codex API v2...');
-
       // Connect to database
       await this.connectDatabase();
 
@@ -144,10 +140,7 @@ class Server {
 
       // Start listening
       const server = this.app.listen(config.port, () => {
-        logger.info(`✅ Server is running on port ${config.port}`);
-        logger.info(`✅ Environment: ${config.nodeEnv}`);
-        logger.info(`✅ GraphQL Playground: ${config.graphqlPlayground ? 'enabled' : 'disabled'}`);
-        logger.info(`🎉 Codex API v2 is ready!`);
+        logger.info(`Server running on port ${config.port} [${config.nodeEnv}]`);
       });
 
       // Graceful shutdown

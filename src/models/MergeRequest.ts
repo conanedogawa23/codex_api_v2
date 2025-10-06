@@ -1,5 +1,10 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+// Static method interfaces
+interface IMergeRequestModel extends mongoose.Model<IMergeRequest> {
+  findByGitlabId(gitlabId: number): Promise<IMergeRequest | null>;
+}
+
 export interface IMergeRequest extends Document {
   gitlabId: number;
   iid: number;
@@ -212,4 +217,4 @@ MergeRequestSchema.methods.updateSyncTimestamp = function() {
   return this.save();
 };
 
-export const MergeRequest = mongoose.model<IMergeRequest>('MergeRequest', MergeRequestSchema);
+export const MergeRequest = mongoose.model<IMergeRequest, IMergeRequestModel>('MergeRequest', MergeRequestSchema);

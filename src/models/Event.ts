@@ -18,7 +18,7 @@ export interface IEvent extends Document {
     ref?: string;
     commitTitle?: string;
   };
-  note?: any;
+  note?: Record<string, unknown>;
   lastSyncedAt: Date;
   isDeleted: boolean;
 }

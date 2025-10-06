@@ -60,8 +60,9 @@ PORT=4000                                            # Optional
 NODE_ENV=development                                 # Optional
 GRAPHQL_PLAYGROUND=true                              # Optional
 LOG_LEVEL=info                                       # Optional
-# ALLOWED_ORIGINS=*                                  # Optional (defaults to allow all in dev)
 ```
+
+**CORS**: Allows all origins by default. No configuration needed.
 
 ## 📚 Documentation Files
 

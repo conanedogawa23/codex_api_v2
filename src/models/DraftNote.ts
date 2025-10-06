@@ -6,7 +6,7 @@ export interface IDraftNote extends Document {
   mergeRequestId: mongoose.Types.ObjectId;
   authorId: mongoose.Types.ObjectId;
   note: string;
-  position?: any;
+  position?: Record<string, unknown>;
   lineCode?: string;
   resolveDiscussion?: boolean;
   createdAt: Date;

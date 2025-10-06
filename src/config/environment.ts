@@ -11,7 +11,6 @@ export interface EnvironmentConfig {
   graphqlPlayground: boolean;
   graphqlIntrospection: boolean;
   logLevel: string;
-  allowedOrigins: string[];
 }
 
 class Environment {
@@ -30,7 +29,6 @@ class Environment {
       graphqlPlayground: process.env.GRAPHQL_PLAYGROUND === 'true',
       graphqlIntrospection: process.env.GRAPHQL_INTROSPECTION === 'true',
       logLevel: process.env.LOG_LEVEL || 'info',
-      allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
     };
   }
 
@@ -53,8 +51,6 @@ class Environment {
     if (this.config.port < 1 || this.config.port > 65535) {
       throw new Error('PORT must be between 1 and 65535');
     }
-
-    logger.info('✅ Environment configuration loaded and validated');
   }
 
   public get(): EnvironmentConfig {
