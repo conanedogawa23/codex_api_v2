@@ -47,6 +47,7 @@ Codex API v2 is a comprehensive GraphQL API designed for GitLab project manageme
 - ⚡ **Performance** - Optimized MongoDB queries with indexes
 - 🛡️ **Error Handling** - Comprehensive error handling and validation
 - 🔄 **Graceful Shutdown** - Clean resource cleanup on termination
+- 🚀 **PM2 Integration** - Production process management with cluster mode
 
 ## 🛠 Tech Stack
 
@@ -57,6 +58,7 @@ Codex API v2 is a comprehensive GraphQL API designed for GitLab project manageme
 | **API** | GraphQL, Apollo Server Express |
 | **Database** | MongoDB 5.0+ |
 | **ORM** | Mongoose 7.6+ |
+| **Process Manager** | PM2 5.3+ |
 | **Tools** | Apollo Rover CLI |
 | **Security** | Helmet, CORS |
 | **Logging** | Winston |
@@ -403,6 +405,19 @@ npm run rover:check
 
 # Rover CLI - Publish schema
 npm run rover:publish
+
+# PM2 - Production process management
+npm run pm2:start           # Start in production mode (cluster)
+npm run pm2:start:dev       # Start in development mode with watch
+npm run pm2:stop            # Stop all instances
+npm run pm2:restart         # Restart all instances
+npm run pm2:reload          # Zero-downtime reload (cluster mode)
+npm run pm2:logs            # View logs
+npm run pm2:monit           # Monitor CPU/Memory
+npm run pm2:status          # Check status
+
+# Quick PM2 production deployment
+npm run deploy:prod         # Build and reload with zero downtime
 ```
 
 ### Using Apollo Rover CLI
@@ -448,7 +463,72 @@ Refer to `docs/DEVELOPMENT_STANDARDS.md` for the canonical coding standards cove
 
 ## 🚢 Deployment
 
-### Production Build
+### PM2 Production Deployment (Recommended)
+
+PM2 is a production process manager that provides:
+- **Zero-downtime deployments** with graceful reload
+- **Cluster mode** utilizing all CPU cores
+- **Auto-restart** on crashes or high memory
+- **Load balancing** across instances
+- **Process monitoring** and logging
+
+#### Quick Start with PM2
+
+```bash
+# 1. Build the application
+npm run build
+
+# 2. Start with PM2 (cluster mode, all CPU cores)
+npm run pm2:start
+
+# 3. Save process list for auto-start on reboot
+npm run pm2:save
+
+# 4. Setup startup script (run once)
+npm run pm2:startup
+# Follow the instructions to enable auto-start
+```
+
+#### PM2 Management Commands
+
+```bash
+# View logs
+npm run pm2:logs
+
+# Monitor processes
+npm run pm2:monit
+
+# Check status
+npm run pm2:status
+
+# Zero-downtime reload (for deployments)
+npm run pm2:reload
+
+# Restart all
+npm run pm2:restart
+
+# Stop all
+npm run pm2:stop
+```
+
+#### Quick Deployment Script
+
+Use the provided startup script for automated deployment:
+
+```bash
+# Make script executable (first time only)
+chmod +x scripts/start-pm2.sh
+
+# Run deployment script
+./scripts/start-pm2.sh production
+
+# Or for staging
+./scripts/start-pm2.sh staging
+```
+
+For complete PM2 documentation, see [`docs/PM2_GUIDE.md`](./PM2_GUIDE.md)
+
+### Production Build (Manual)
 
 1. **Build the application:**
    ```bash

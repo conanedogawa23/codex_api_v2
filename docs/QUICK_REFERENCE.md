@@ -13,10 +13,19 @@ npm run dev
 ## 📝 Essential Commands
 
 ```bash
+# Development
 npm run dev         # Start development server
 npm run build       # Build for production
 npm start           # Run production server
 npm run lint        # Check code quality
+
+# PM2 Production
+npm run pm2:start   # Start with PM2 (cluster mode)
+npm run pm2:stop    # Stop all PM2 processes
+npm run pm2:reload  # Zero-downtime reload
+npm run pm2:logs    # View PM2 logs
+npm run pm2:monit   # Monitor processes
+npm run deploy:prod # Build and deploy
 ```
 
 ## 🔗 Key URLs
