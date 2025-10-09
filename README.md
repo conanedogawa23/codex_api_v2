@@ -8,6 +8,14 @@
 
 ## What's New
 
+🎉 **Background Jobs with Bull + Redis** - Automated scheduling for periodic data updates
+
+- ✅ Background job system using Bull queue library
+- ✅ Redis integration for job management
+- ✅ User sync jobs running every 20 minutes
+- ✅ Job monitoring and management REST API
+- ✅ Graceful shutdown and error handling
+
 🎉 **Full GitLab Integration Architecture** - Complete API system ready for GitLab MCP integration
 
 - ✅ 8 fully functional GraphQL modules (Project, Issue, MergeRequest, Pipeline, Milestone, Label, Task, User)
@@ -42,7 +50,11 @@ All documentation lives inside the `docs/` directory:
 - **`docs/GRAPHQL_EXAMPLES.md`** – Sample queries and mutations
 - **`docs/QUICK_REFERENCE.md`** – Handy commands and snippets
 
-### New Implementation Docs
+### Background Jobs Documentation
+- **`docs/BACKGROUND_JOBS.md`** – Complete background jobs guide
+- **`docs/JOBS_QUICK_START.md`** – Quick start guide for jobs
+
+### Implementation Docs
 - **`docs/GITLAB_INTEGRATION.md`** – Complete GitLab integration guide
 - **`docs/IMPLEMENTATION_COMPLETE.md`** – Full implementation summary
 - **`docs/ARCHITECTURE_ANALYSIS.md`** – Architecture decisions and verification
@@ -73,6 +85,8 @@ All documentation lives inside the `docs/` directory:
 - 🎯 **Type Safety** - End-to-end TypeScript with strict mode
 - ⚡ **Performance Optimized** - Mongoose `.lean()` for 5-10x faster queries
 - 🏗️ **19 Data Models** - Complete domain coverage
+- 🔄 **Background Jobs** - Bull + Redis for scheduled tasks (20-minute intervals)
+- 📊 **Job Monitoring** - REST API for job status and management
 
 ### Integration Architecture
 
@@ -88,6 +102,8 @@ GitLab (via MCP) → External Sync Service → MongoDB → Codex API v2 → Clie
 - **Language**: TypeScript 5.2+
 - **API Framework**: Apollo Server Express 3.12+
 - **Database**: MongoDB via Mongoose 7.6+
+- **Cache/Queue**: Redis with ioredis
+- **Job System**: Bull queue library
 - **Architecture**: GraphQL Modules 2.3+
 - **Process Manager**: PM2 (production)
 

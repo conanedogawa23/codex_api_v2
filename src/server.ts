@@ -12,6 +12,7 @@ import {
   securityMiddleware,
   corsMiddleware,
 } from './middleware';
+import { jobManager } from './jobs';
 
 class Server {
   private app: express.Application;
@@ -91,10 +92,97 @@ class Server {
           status: dbHealth.status,
           responseTime: dbHealth.responseTime,
         },
+        jobs: {
+          initialized: jobManager.getStatus(),
+        },
         memory: {
           usage: process.memoryUsage(),
         },
       });
+    });
+
+    // Jobs status endpoint
+    this.app.get('/jobs/status', async (req, res) => {
+      try {
+        const status = await jobManager.getUserSyncStatus();
+        res.json({
+          success: true,
+          data: status,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    // Trigger manual user sync
+    this.app.post('/jobs/trigger/user-sync', async (req, res) => {
+      try {
+        const { syncType = 'incremental' } = req.body;
+        await jobManager.triggerUserSync(syncType);
+        res.json({
+          success: true,
+          message: `User sync (${syncType}) triggered successfully`,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    // Pause user sync jobs
+    this.app.post('/jobs/pause', async (req, res) => {
+      try {
+        await jobManager.pauseUserSync();
+        res.json({
+          success: true,
+          message: 'User sync jobs paused',
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    // Resume user sync jobs
+    this.app.post('/jobs/resume', async (req, res) => {
+      try {
+        await jobManager.resumeUserSync();
+        res.json({
+          success: true,
+          message: 'User sync jobs resumed',
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    // Clean up old jobs
+    this.app.post('/jobs/cleanup', async (req, res) => {
+      try {
+        const { gracePeriodHours = 24 } = req.body;
+        await jobManager.cleanupJobs(gracePeriodHours);
+        res.json({
+          success: true,
+          message: `Old jobs cleaned up (grace period: ${gracePeriodHours}h)`,
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
     });
 
     // Root endpoint
@@ -105,6 +193,13 @@ class Server {
         endpoints: {
           graphql: '/graphql',
           health: '/health',
+          jobs: {
+            status: '/jobs/status',
+            triggerUserSync: '/jobs/trigger/user-sync (POST)',
+            pause: '/jobs/pause (POST)',
+            resume: '/jobs/resume (POST)',
+            cleanup: '/jobs/cleanup (POST)',
+          },
         },
         documentation: 'Visit /graphql for GraphQL Playground (development only)',
       });
@@ -122,6 +217,16 @@ class Server {
     await database.connect(config.mongodbUri);
   }
 
+  private async initializeJobs(): Promise<void> {
+    try {
+      await jobManager.initialize();
+      logger.info('Background jobs initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize background jobs:', error);
+      // Don't exit - jobs are optional, API should still work
+    }
+  }
+
   public async start(): Promise<void> {
     try {
       const config = environment.get();
@@ -137,6 +242,9 @@ class Server {
 
       // Setup routes
       this.setupRoutes();
+
+      // Initialize background jobs
+      await this.initializeJobs();
 
       // Start listening
       const server = this.app.listen(config.port, () => {
@@ -159,6 +267,14 @@ class Server {
       // Stop accepting new connections
       server.close(async () => {
         logger.info('HTTP server closed');
+
+        // Stop background jobs
+        try {
+          await jobManager.shutdown();
+          logger.info('Job manager stopped');
+        } catch (error) {
+          logger.error('Error stopping job manager:', error);
+        }
 
         // Stop Apollo Server
         if (this.apolloServer) {

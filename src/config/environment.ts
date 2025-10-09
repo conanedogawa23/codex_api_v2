@@ -11,6 +11,12 @@ export interface EnvironmentConfig {
   graphqlPlayground: boolean;
   graphqlIntrospection: boolean;
   logLevel: string;
+  redis: {
+    host: string;
+    port: number;
+    password?: string;
+    db: number;
+  };
 }
 
 class Environment {
@@ -29,6 +35,12 @@ class Environment {
       graphqlPlayground: process.env.GRAPHQL_PLAYGROUND === 'true',
       graphqlIntrospection: process.env.GRAPHQL_INTROSPECTION === 'true',
       logLevel: process.env.LOG_LEVEL || 'info',
+      redis: {
+        host: process.env.REDIS_HOST || '127.0.0.1',
+        port: parseInt(process.env.REDIS_PORT || '6379', 10),
+        password: process.env.REDIS_PASSWORD,
+        db: parseInt(process.env.REDIS_DB || '0', 10),
+      },
     };
   }
 
