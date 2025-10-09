@@ -1,5 +1,5 @@
 import { userSyncQueue } from '../config/queue';
-import { processUserSync, UserSyncJobData } from '../processors/userSync.processor';
+import { processUserSync, UserSyncJobData } from '../processors/users/userSync.processor';
 import { logger } from '../../utils/logger';
 
 /**

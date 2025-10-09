@@ -23,8 +23,6 @@
 - Reduced code complexity across multiple files
 
 ### Added
-- `docs/CORS_CONFIGURATION.md` - Comprehensive CORS documentation
-- `docs/CODE_CLEANUP_SUMMARY.md` - Detailed cleanup documentation
 - `.env.example` - Clean environment variable template
 
 ### Removed

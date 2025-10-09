@@ -40,30 +40,6 @@ npm run build
 open http://localhost:4000/graphql
 ```
 
-## Documentation
-
-All documentation lives inside the `docs/` directory:
-
-### Core Documentation
-- **`docs/README.md`** – Project overview, setup, deployment
-- **`docs/SETUP_GUIDE.md`** – Environment configuration
-- **`docs/GRAPHQL_EXAMPLES.md`** – Sample queries and mutations
-- **`docs/QUICK_REFERENCE.md`** – Handy commands and snippets
-
-### Background Jobs Documentation
-- **`docs/BACKGROUND_JOBS.md`** – Complete background jobs guide
-- **`docs/JOBS_QUICK_START.md`** – Quick start guide for jobs
-
-### Implementation Docs
-- **`docs/GITLAB_INTEGRATION.md`** – Complete GitLab integration guide
-- **`docs/IMPLEMENTATION_COMPLETE.md`** – Full implementation summary
-- **`docs/ARCHITECTURE_ANALYSIS.md`** – Architecture decisions and verification
-- **`docs/ARCHITECTURE_SUMMARY.md`** – Quick reference guide
-
-### Standards
-- **`docs/DEVELOPMENT_STANDARDS.md`** – Coding standards and best practices
-- **`docs/MODULAR_GRAPHQL_ARCHITECTURE.md`** – GraphQL Modules architecture
-
 ## Features
 
 ### GraphQL Modules (All Implemented)
@@ -148,8 +124,6 @@ mutation {
 }
 ```
 
-See `docs/GRAPHQL_EXAMPLES.md` for more examples.
-
 ## Environment Setup
 
 Create a `.env` file in the project root:
@@ -162,8 +136,6 @@ GRAPHQL_PLAYGROUND=true
 GRAPHQL_INTROSPECTION=true
 LOG_LEVEL=debug
 ```
-
-See `docs/SETUP_GUIDE.md` for complete configuration details.
 
 ## Development Commands
 
@@ -208,7 +180,6 @@ codex_api_v2/
 │   ├── middleware/            # Express middleware
 │   ├── utils/                 # Utility functions
 │   └── server.ts              # Application entry point
-├── docs/                      # Complete documentation
 └── dist/                      # Compiled JavaScript
 ```
 
@@ -239,29 +210,14 @@ curl http://localhost:4000/health
 ```
 
 ## Contributing
-
-1. Follow the coding standards in `docs/DEVELOPMENT_STANDARDS.md`
-2. Use the modular architecture pattern in `docs/MODULAR_GRAPHQL_ARCHITECTURE.md`
 3. Add tests for new features
 4. Update documentation as needed
 
 ## Documentation
 
-### Key Documents
-- **[GitLab Integration](docs/GITLAB_INTEGRATION.md)** - GitLab integration architecture
-- **[Implementation Complete](docs/IMPLEMENTATION_COMPLETE.md)** - Feature summary
-- **[Complete Optimization Summary](docs/COMPLETE_OPTIMIZATION_SUMMARY.md)** - Performance optimization details
-- **[Lean Optimization](docs/LEAN_OPTIMIZATION.md)** - Mongoose `.lean()` guide
-- **[Legacy Cleanup](docs/LEGACY_CLEANUP.md)** - Architecture cleanup details
-- **[GraphQL Architecture](docs/MODULAR_GRAPHQL_ARCHITECTURE.md)** - Modular design
-- **[Development Standards](docs/DEVELOPMENT_STANDARDS.md)** - Coding guidelines
-
 ## Support
 
 For questions or issues:
-1. Check `docs/GITLAB_INTEGRATION.md` for integration details
-2. Review `docs/COMPLETE_OPTIMIZATION_SUMMARY.md` for performance details
-3. See `docs/IMPLEMENTATION_COMPLETE.md` for feature summary
 4. See GraphQL Playground for schema introspection
 5. Check server logs for debugging
 
