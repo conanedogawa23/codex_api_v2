@@ -8,6 +8,7 @@ interface IUserModel extends mongoose.Model<IUser> {
 }
 
 export interface IUser extends Document {
+  // Core Identity
   gitlabId?: number;
   name: string;
   email: string;
@@ -26,6 +27,56 @@ export interface IUser extends Document {
   }[];
   lastSynced: Date;
   isActive: boolean;
+
+  // Contact & Social Information
+  skype?: string;
+  linkedin?: string;
+  twitter?: string;
+  discord?: string;
+  websiteUrl?: string;
+  workInformation?: string;
+  localTime?: string;
+  birthday?: Date;
+  hireDate?: Date;
+  terminationDate?: Date;
+  language?: string;
+  theme?: string;
+  bio?: string;
+  location?: string;
+  pronouns?: string;
+  publicEmail?: string;
+  webUrl?: string;
+
+  // Activity Statistics
+  groupCount?: number;
+  projectCount?: number;
+  contributionsCount?: number;
+  discussionsCount?: number;
+  issuesCreatedCount?: number;
+  mergeRequestsCount?: number;
+  commitsCount?: number;
+
+  // Security & Access Control
+  twoFactorEnabled?: boolean;
+  lockedAt?: Date;
+  unlockAt?: Date;
+  authenticationType?: string;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+
+  // Organization & Management
+  manager?: {
+    id: string;
+    name: string;
+    email?: string;
+  };
+  reportsTo?: {
+    id: string;
+    name: string;
+    email?: string;
+  };
+  costCenter?: string;
+  employeeNumber?: string;
   
   // Instance methods
   updateSyncTimestamp(): Promise<IUser>;
@@ -114,7 +165,57 @@ const UserSchema: Schema = new Schema({
   isActive: {
     type: Boolean,
     default: true
-  }
+  },
+
+  // Contact & Social Information
+  skype: String,
+  linkedin: String,
+  twitter: String,
+  discord: String,
+  websiteUrl: String,
+  workInformation: String,
+  localTime: String,
+  birthday: Date,
+  hireDate: Date,
+  terminationDate: Date,
+  language: String,
+  theme: String,
+  bio: String,
+  location: String,
+  pronouns: String,
+  publicEmail: String,
+  webUrl: String,
+
+  // Activity Statistics
+  groupCount: { type: Number, min: 0 },
+  projectCount: { type: Number, min: 0 },
+  contributionsCount: { type: Number, min: 0 },
+  discussionsCount: { type: Number, min: 0 },
+  issuesCreatedCount: { type: Number, min: 0 },
+  mergeRequestsCount: { type: Number, min: 0 },
+  commitsCount: { type: Number, min: 0 },
+
+  // Security & Access Control
+  twoFactorEnabled: Boolean,
+  lockedAt: Date,
+  unlockAt: Date,
+  authenticationType: String,
+  emailVerified: Boolean,
+  phoneVerified: Boolean,
+
+  // Organization & Management
+  manager: {
+    id: String,
+    name: String,
+    email: String
+  },
+  reportsTo: {
+    id: String,
+    name: String,
+    email: String
+  },
+  costCenter: String,
+  employeeNumber: String
 }, {
   timestamps: true,
   collection: 'users'

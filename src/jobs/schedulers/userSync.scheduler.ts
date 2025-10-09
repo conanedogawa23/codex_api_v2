@@ -22,7 +22,6 @@ export const initializeUserSyncScheduler = async (): Promise<void> => {
 
     // Schedule the job to run every 20 minutes
     const jobData: UserSyncJobData = {
-      syncType: 'incremental',
       batchSize: 100
     };
 
@@ -60,10 +59,9 @@ export const initializeUserSyncScheduler = async (): Promise<void> => {
 /**
  * Trigger an immediate user sync job (outside the schedule)
  */
-export const triggerImmediateSync = async (syncType: 'full' | 'incremental' = 'incremental'): Promise<void> => {
+export const triggerImmediateSync = async (): Promise<void> => {
   try {
     const jobData: UserSyncJobData = {
-      syncType,
       batchSize: 100
     };
 
@@ -78,8 +76,7 @@ export const triggerImmediateSync = async (syncType: 'full' | 'incremental' = 'i
     });
 
     logger.info('Immediate user sync triggered', {
-      jobId: job.id,
-      syncType
+      jobId: job.id
     });
   } catch (error: any) {
     logger.error('Failed to trigger immediate sync', {

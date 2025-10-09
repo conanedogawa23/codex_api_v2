@@ -121,11 +121,10 @@ class Server {
     // Trigger manual user sync
     this.app.post('/jobs/trigger/user-sync', async (req, res) => {
       try {
-        const { syncType = 'incremental' } = req.body;
-        await jobManager.triggerUserSync(syncType);
+        await jobManager.triggerUserSync();
         res.json({
           success: true,
-          message: `User sync (${syncType}) triggered successfully`,
+          message: 'User sync triggered successfully',
           timestamp: new Date().toISOString(),
         });
       } catch (error: any) {

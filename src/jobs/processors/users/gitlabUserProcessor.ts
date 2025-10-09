@@ -9,6 +9,54 @@ import { GITLAB_USER_QUERIES } from '../../../graphql/types/users/gitlabUserQuer
 export class GitlabUserProcessor {
 
   /**
+   * Fetch simple user data from GitLab with pagination support
+   */
+  async fetchSimpleUsers(batchSize: number = 100): Promise<any[]> {
+    logger.info('Fetching simple users from GitLab', { batchSize });
+
+    const allUsers: any[] = [];
+    let hasNextPage = true;
+    let after: string | null = null;
+
+    try {
+      while (hasNextPage) {
+        const result = await gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.SIMPLE_USERS, {
+          first: batchSize,
+          after: after
+        });
+
+        const usersData = result?.data?.users;
+        if (usersData?.nodes) {
+          allUsers.push(...usersData.nodes);
+          hasNextPage = usersData.pageInfo?.hasNextPage || false;
+          after = usersData.pageInfo?.endCursor || null;
+
+          logger.debug('Fetched user batch', {
+            batchSize: usersData.nodes.length,
+            totalUsers: allUsers.length,
+            hasNextPage
+          });
+        } else {
+          logger.warn('No users data in response', { result });
+          break;
+        }
+      }
+
+      logger.info('Completed fetching simple users from GitLab', {
+        totalUsers: allUsers.length
+      });
+
+      return allUsers;
+    } catch (error: unknown) {
+      logger.error('Error fetching simple users from GitLab', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        batchSize
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Fetch comprehensive user data from GitLab
    */
   async fetchUserData(userIds: number[]): Promise<any> {

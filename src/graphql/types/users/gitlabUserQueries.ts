@@ -851,6 +851,26 @@ export const USER_PRODUCTIVITY_QUERY = `
   }
 `;
 
+// Simple user query for fetching basic user information with IDs
+export const SIMPLE_USERS_QUERY = `
+  query GetSimpleUsers($first: Int, $after: String) {
+    users(first: $first, after: $after) {
+      nodes {
+        id
+        username
+        email
+        name
+        state
+        createdAt
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
 // Export all queries as a collection
 export const GITLAB_USER_QUERIES = {
   CORE_IDENTITY: CORE_IDENTITY_QUERY,
@@ -868,4 +888,5 @@ export const GITLAB_USER_QUERIES = {
   USER_INTERACTIONS: USER_INTERACTIONS_QUERY,
   USER_REVIEWS: USER_REVIEWS_QUERY,
   USER_PRODUCTIVITY: USER_PRODUCTIVITY_QUERY,
+  SIMPLE_USERS: SIMPLE_USERS_QUERY,
 } as const;
