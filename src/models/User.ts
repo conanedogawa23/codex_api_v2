@@ -136,17 +136,17 @@ UserSchema.virtual('fullName').get(function() {
 
 // Static method to find by GitLab ID
 UserSchema.statics.findByGitlabId = function(gitlabId: number) {
-  return this.findOne({ gitlabId });
+  return this.findOne({ gitlabId }).lean();
 };
 
 // Static method to find by email
 UserSchema.statics.findByEmail = function(email: string) {
-  return this.findOne({ email: email.toLowerCase() });
+  return this.findOne({ email: email.toLowerCase() }).lean();
 };
 
 // Static method to find by department
 UserSchema.statics.findByDepartment = function(department: string) {
-  return this.find({ department, isActive: true });
+  return this.find({ department, isActive: true }).lean();
 };
 
 // Instance method to update sync timestamp

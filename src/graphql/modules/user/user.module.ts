@@ -65,17 +65,17 @@ export const userModule = createModule({
   resolvers: {
     Query: {
       user: async (_: any, { id }: { id: string }) => {
-        const user = await User.findById(id);
+        const user = await User.findById(id).lean();
         if (!user) {
           throw new AppError('User not found', 404);
         }
         return user;
       },
       users: async (_: any, { status, department, limit = 20, offset = 0 }: any) => {
-        const filter: any = { isActive: true };
+        const filter: any = {};
         if (status) filter.status = status;
         if (department) filter.department = department;
-        return await User.find(filter).limit(limit).skip(offset).sort({ createdAt: -1 });
+        return await User.find(filter).limit(limit).skip(offset).sort({ createdAt: -1 }).lean();
       },
       userByEmail: async (_: any, { email }: { email: string }) => {
         const user = await User.findByEmail(email);

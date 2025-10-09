@@ -21,6 +21,11 @@ export interface INote extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+  
+  // Instance methods
+  resolve(userId: mongoose.Types.ObjectId): Promise<this>;
+  unresolve(): Promise<this>;
+  markAsDeleted(): Promise<this>;
 }
 
 const NoteSchema: Schema = new Schema({
