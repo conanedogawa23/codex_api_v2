@@ -40,6 +40,10 @@ export const iterationModule = createModule({
     }
   `,
   resolvers: {
+    Iteration: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       iteration: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching iteration by ID', { id });

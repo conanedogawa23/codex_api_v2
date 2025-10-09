@@ -33,6 +33,10 @@ export const discussionModule = createModule({
     }
   `,
   resolvers: {
+    Discussion: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       discussion: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching discussion by ID', { id });

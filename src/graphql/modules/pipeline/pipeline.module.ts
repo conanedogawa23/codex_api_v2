@@ -57,6 +57,10 @@ export const pipelineModule = createModule({
     }
   `,
   resolvers: {
+    Pipeline: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       pipeline: async (_: any, { id }: { id: string }) => {
         const pipeline = await Pipeline.findById(id).lean();

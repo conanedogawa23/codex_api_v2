@@ -30,6 +30,10 @@ export const draftNoteModule = createModule({
     }
   `,
   resolvers: {
+    DraftNote: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       draftNote: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching draft note by ID', { id });

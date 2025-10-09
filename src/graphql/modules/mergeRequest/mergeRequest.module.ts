@@ -87,6 +87,10 @@ export const mergeRequestModule = createModule({
     }
   `,
   resolvers: {
+    MergeRequest: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       mergeRequest: async (_: any, { id }: { id: string }) => {
         const mr = await MergeRequest.findById(id).lean();

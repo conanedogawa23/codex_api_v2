@@ -63,6 +63,10 @@ export const userModule = createModule({
     }
   `,
   resolvers: {
+    User: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       user: async (_: any, { id }: { id: string }) => {
         const user = await User.findById(id).lean();

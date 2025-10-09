@@ -56,6 +56,10 @@ export const pipelineJobModule = createModule({
     }
   `,
   resolvers: {
+    PipelineJob: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       pipelineJob: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching pipeline job by ID', { id });

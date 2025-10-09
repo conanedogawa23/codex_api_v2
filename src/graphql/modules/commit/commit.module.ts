@@ -42,6 +42,10 @@ export const commitModule = createModule({
     }
   `,
   resolvers: {
+    Commit: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       commit: async (_: any, { sha }: { sha: string }) => {
         logger.info('Fetching commit by SHA', { sha });

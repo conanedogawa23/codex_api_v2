@@ -145,6 +145,10 @@ export const projectModule = createModule({
     }
   `,
   resolvers: {
+    Project: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       project: async (_: any, { id }: { id: string }) => {
         const project = await Project.findById(id).lean();

@@ -42,6 +42,10 @@ export const eventModule = createModule({
     }
   `,
   resolvers: {
+    Event: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       event: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching event by ID', { id });

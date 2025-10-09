@@ -30,6 +30,10 @@ export const attachmentModule = createModule({
     }
   `,
   resolvers: {
+    Attachment: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       attachment: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching attachment by ID', { id });

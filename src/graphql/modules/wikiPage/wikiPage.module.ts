@@ -37,6 +37,10 @@ export const wikiPageModule = createModule({
     }
   `,
   resolvers: {
+    WikiPage: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       wikiPage: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching wiki page by ID', { id });

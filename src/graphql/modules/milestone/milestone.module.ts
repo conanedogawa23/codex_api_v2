@@ -53,6 +53,10 @@ export const milestoneModule = createModule({
     }
   `,
   resolvers: {
+    Milestone: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       milestone: async (_: any, { id }: { id: string }) => {
         const milestone = await Milestone.findById(id).lean();

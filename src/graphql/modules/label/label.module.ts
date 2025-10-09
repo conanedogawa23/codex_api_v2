@@ -53,6 +53,10 @@ export const labelModule = createModule({
     }
   `,
   resolvers: {
+    Label: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       label: async (_: any, { id }: { id: string }) => {
         const label = await Label.findById(id).lean();

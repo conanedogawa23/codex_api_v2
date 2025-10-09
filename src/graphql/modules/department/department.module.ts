@@ -50,6 +50,12 @@ export const departmentModule = createModule({
     }
   `,
   resolvers: {
+    Department: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+      memberCount: (parent: any) => parent.members?.length || 0,
+      projectCount: (parent: any) => parent.projects?.length || 0,
+    },
+    
     Query: {
       department: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching department by ID', { id });

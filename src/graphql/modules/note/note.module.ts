@@ -51,6 +51,10 @@ export const noteModule = createModule({
     }
   `,
   resolvers: {
+    Note: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       note: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching note by ID', { id });

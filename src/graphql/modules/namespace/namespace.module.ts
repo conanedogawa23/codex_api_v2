@@ -44,6 +44,10 @@ export const namespaceModule = createModule({
     }
   `,
   resolvers: {
+    Namespace: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       namespace: async (_: any, { id }: { id: string }) => {
         logger.info('Fetching namespace by ID', { id });

@@ -85,6 +85,10 @@ export const taskModule = createModule({
     }
   `,
   resolvers: {
+    Task: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+    },
+    
     Query: {
       task: async (_: any, { id }: { id: string }) => {
         const task = await Task.findById(id).lean();
