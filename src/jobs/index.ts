@@ -83,8 +83,8 @@ export class JobManager {
   /**
    * Trigger manual user sync
    */
-  public async triggerUserSync(syncType: 'full' | 'incremental' = 'incremental'): Promise<void> {
-    return triggerImmediateSync(syncType);
+  public async triggerUserSync(): Promise<void> {
+    return triggerImmediateSync();
   }
 
   /**

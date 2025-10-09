@@ -10,12 +10,17 @@ export interface EnvironmentConfig {
   mongodbUri: string;
   graphqlPlayground: boolean;
   graphqlIntrospection: boolean;
+  graphqlUrl: string;
   logLevel: string;
   redis: {
     host: string;
     port: number;
     password?: string;
     db: number;
+  };
+  gitlab: {
+    apiUrl: string;
+    token?: string;
   };
 }
 
@@ -34,12 +39,17 @@ class Environment {
       mongodbUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/codex_api_v2',
       graphqlPlayground: process.env.GRAPHQL_PLAYGROUND === 'true',
       graphqlIntrospection: process.env.GRAPHQL_INTROSPECTION === 'true',
+      graphqlUrl: process.env.GRAPHQL_URL || `http://localhost:${process.env.PORT || '4000'}/graphql`,
       logLevel: process.env.LOG_LEVEL || 'info',
       redis: {
         host: process.env.REDIS_HOST || '127.0.0.1',
         port: parseInt(process.env.REDIS_PORT || '6379', 10),
         password: process.env.REDIS_PASSWORD,
         db: parseInt(process.env.REDIS_DB || '0', 10),
+      },
+      gitlab: {
+        apiUrl: process.env.GITLAB_GRAPHQL_URL || 'https://gitlab.com/api/graphql',
+        token: process.env.GITLAB_PERSONAL_ACCESS_TOKEN,
       },
     };
   }
