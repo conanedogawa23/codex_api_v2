@@ -1,7 +1,7 @@
 import { logger } from './logger';
 
 interface GitLabGraphQLResponse<T = unknown> {
-  data?: T;
+  data?: any;
   errors?: Array<{
     message: string;
     locations?: Array<{ line: number; column: number }>;

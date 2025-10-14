@@ -25,7 +25,7 @@ export class GitlabUserProcessor {
           after: after
         });
 
-        const usersData: any = result?.data;
+        const usersData: any = (result as any)?.data?.users;
         if (usersData?.nodes) {
           allUsers.push(...usersData.nodes);
           hasNextPage = usersData.pageInfo?.hasNextPage || false;
@@ -37,7 +37,7 @@ export class GitlabUserProcessor {
             hasNextPage
           });
         } else {
-          logger.warn('No users data in response', { result });
+          logger.warn('No users data in response', { length: (result as any)?.data?.users?.nodes?.length, result });
           break;
         }
       }
