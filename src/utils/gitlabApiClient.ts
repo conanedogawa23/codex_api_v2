@@ -1,5 +1,14 @@
 import { logger } from './logger';
 
+interface GitLabGraphQLResponse<T = unknown> {
+  data?: T;
+  errors?: Array<{
+    message: string;
+    locations?: Array<{ line: number; column: number }>;
+    path?: string[];
+  }>;
+}
+
 /**
  * GitLab API Client
  * Simple HTTP client for making GraphQL requests to GitLab API
@@ -20,7 +29,7 @@ export class GitlabApiClient {
   /**
    * Execute a GraphQL query against GitLab API
    */
-  async executeQuery(query: string, variables: Record<string, unknown> = {}): Promise<any> {
+  async executeQuery<T = unknown>(query: string, variables: Record<string, unknown> = {}): Promise<GitLabGraphQLResponse<T>> {
     try {
       const response = await fetch(this.apiUrl, {
         method: 'POST',

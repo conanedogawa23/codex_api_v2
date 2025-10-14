@@ -190,7 +190,8 @@ export const issueModule = createModule({
         if (!issue) {
           throw new AppError('Issue not found', 404);
         }
-        return await issue.updateProgress(percentage);
+        await issue.updateProgress(percentage);
+        return await Issue.findById(id).lean(); // Return updated issue as lean object
       },
 
       addIssueTag: async (_: any, { id, tag }: { id: string; tag: string }) => {
@@ -198,7 +199,8 @@ export const issueModule = createModule({
         if (!issue) {
           throw new AppError('Issue not found', 404);
         }
-        return await issue.addTag(tag);
+        await issue.addTag(tag);
+        return await Issue.findById(id).lean(); // Return updated issue as lean object
       },
 
       removeIssueTag: async (_: any, { id, tag }: { id: string; tag: string }) => {
@@ -206,7 +208,8 @@ export const issueModule = createModule({
         if (!issue) {
           throw new AppError('Issue not found', 404);
         }
-        return await issue.removeTag(tag);
+        await issue.removeTag(tag);
+        return await Issue.findById(id).lean(); // Return updated issue as lean object
       },
 
       closeIssue: async (_: any, { id }: { id: string }) => {

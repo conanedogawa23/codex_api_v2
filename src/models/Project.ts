@@ -258,7 +258,7 @@ ProjectSchema.virtual('urlPath').get(function() {
 
 // Static method to find by GitLab ID
 ProjectSchema.statics.findByGitlabId = function(gitlabId: number) {
-  return this.findOne({ gitlabId });
+  return this.findOne({ gitlabId }).lean();
 };
 
 // Instance method to update sync timestamp
@@ -304,12 +304,12 @@ ProjectSchema.methods.unassignUser = function(userId: string) {
 
 // Static method to find by department
 ProjectSchema.statics.findByDepartment = function(department: string) {
-  return this.find({ department, isActive: true });
+  return this.find({ department, isActive: true }).lean();
 };
 
 // Static method to find by status
 ProjectSchema.statics.findByStatus = function(status: string) {
-  return this.find({ status, isActive: true });
+  return this.find({ status, isActive: true }).lean();
 };
 
 // Static method to find overdue projects
@@ -318,7 +318,7 @@ ProjectSchema.statics.findOverdue = function() {
     deadline: { $lt: new Date() },
     status: { $nin: ['completed', 'cancelled'] },
     isActive: true
-  });
+  }).lean();
 };
 
 export const Project = mongoose.model<IProject, IProjectModel>('Project', ProjectSchema);

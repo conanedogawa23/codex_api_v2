@@ -218,7 +218,8 @@ export const projectModule = createModule({
         if (!project) {
           throw new AppError('Project not found', 404);
         }
-        return await project.updateProgress(progress);
+        await project.updateProgress(progress);
+        return await Project.findById(id).lean(); // Return updated project as lean object
       },
 
       assignUserToProject: async (
@@ -229,7 +230,8 @@ export const projectModule = createModule({
         if (!project) {
           throw new AppError('Project not found', 404);
         }
-        return await project.assignUser(userId, userName, role, department);
+        await project.assignUser(userId, userName, role, department);
+        return await Project.findById(projectId).lean(); // Return updated project as lean object
       },
 
       unassignUserFromProject: async (_: any, { projectId, userId }: any) => {
@@ -237,7 +239,8 @@ export const projectModule = createModule({
         if (!project) {
           throw new AppError('Project not found', 404);
         }
-        return await project.unassignUser(userId);
+        await project.unassignUser(userId);
+        return await Project.findById(projectId).lean(); // Return updated project as lean object
       },
 
       syncProjectFromGitLab: async (_: any, { input }: any, { gitlabMCP }: any) => {

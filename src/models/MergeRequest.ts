@@ -203,12 +203,12 @@ MergeRequestSchema.index({ lastSynced: 1 });
 
 // Static method to find by project and IID
 MergeRequestSchema.statics.findByProjectAndIid = function(projectId: number, iid: number) {
-  return this.findOne({ projectId, iid });
+  return this.findOne({ projectId, iid }).lean();
 };
 
 // Static method to find by GitLab ID
 MergeRequestSchema.statics.findByGitlabId = function(gitlabId: number) {
-  return this.findOne({ gitlabId });
+  return this.findOne({ gitlabId }).lean();
 };
 
 // Instance method to update sync timestamp

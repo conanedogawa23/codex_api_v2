@@ -47,10 +47,10 @@ export class JobManager {
 
       this.isInitialized = true;
       logger.info('Job manager initialized successfully');
-    } catch (error: any) {
+    } catch (error) {
       logger.error('Failed to initialize job manager', {
-        error: error.message,
-        stack: error.stack,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       });
       throw error;
     }
@@ -65,9 +65,9 @@ export class JobManager {
       await closeQueues();
       this.isInitialized = false;
       logger.info('Job manager shutdown successfully');
-    } catch (error: any) {
+    } catch (error) {
       logger.error('Error during job manager shutdown', {
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }

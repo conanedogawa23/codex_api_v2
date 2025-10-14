@@ -239,7 +239,7 @@ IssueSchema.methods.removeTag = function(tag: string) {
 
 // Static method to find by priority
 IssueSchema.statics.findByPriority = function(priority: string) {
-  return this.find({ priority, isActive: true });
+  return this.find({ priority, isActive: true }).lean();
 };
 
 // Static method to find overdue issues
@@ -248,7 +248,7 @@ IssueSchema.statics.findOverdue = function() {
     dueDate: { $lt: new Date() },
     state: 'opened',
     isActive: true
-  });
+  }).lean();
 };
 
 export const Issue = mongoose.model<IIssue, IIssueModel>('Issue', IssueSchema);

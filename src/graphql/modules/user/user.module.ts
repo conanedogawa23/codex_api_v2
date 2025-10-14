@@ -109,14 +109,16 @@ export const userModule = createModule({
         if (!user) {
           throw new AppError('User not found', 404);
         }
-        return await user.addProject(projectId, projectName, role);
+        await user.addProject(projectId, projectName, role);
+        return await User.findById(id).lean(); // Return updated user as lean object
       },
       removeUserProject: async (_: any, { id, projectId }: any) => {
         const user = await User.findById(id);
         if (!user) {
           throw new AppError('User not found', 404);
         }
-        return await user.removeProject(projectId);
+        await user.removeProject(projectId);
+        return await User.findById(id).lean(); // Return updated user as lean object
       },
     },
   },

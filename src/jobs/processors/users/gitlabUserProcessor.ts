@@ -25,7 +25,7 @@ export class GitlabUserProcessor {
           after: after
         });
 
-        const usersData = result?.data?.users;
+        const usersData: any = result?.data;
         if (usersData?.nodes) {
           allUsers.push(...usersData.nodes);
           hasNextPage = usersData.pageInfo?.hasNextPage || false;
@@ -102,7 +102,7 @@ export class GitlabUserProcessor {
 
       // Merge all data using the merge function
       const mergedData = this.mergeCompleteUserData(
-        coreIdentityResults.data?.users?.nodes || [],
+        (coreIdentityResults as any)?.data?.users?.nodes || [],
         coreIdentityResults,
         contactSocialResults,
         activityStatsResults,
@@ -151,7 +151,7 @@ export class GitlabUserProcessor {
     userInteractions: any,
     userReviews: any,
     userProductivity: any
-  ): any[] {
+  ): any {
     return originalUsers.map(user => {
       const coreData = this.findUserData(coreIdentity, user.id);
       const contactData = this.findUserData(contactSocial, user.id);
@@ -294,7 +294,7 @@ export class GitlabUserProcessor {
    * Find user data from query results by user ID
    */
   private findUserData(queryResult: any, userId: string): any {
-    return queryResult?.data?.users?.nodes?.find((user: any) => user.id === userId);
+    return queryResult?.data?.users?.nodes?.find((user: any) => user?.id === userId);
   }
 }
 
