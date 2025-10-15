@@ -25,16 +25,15 @@ export interface UserSyncResult {
 
 /**
  * User Sync Job Processor
- * Fetches users directly from GitLab and updates their lastSynced timestamp in database
- * This fetches users from GitLab GraphQL API and syncs with local database
  */
 export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSyncResult> => {
   const startTime = Date.now();
   const { batchSize = 100 } = job.data;
 
-  logger.info('Starting user sync job (GitLab-based)', {
+  logger.info('Starting comprehensive user sync job with all data streams', {
     jobId: job.id,
-    batchSize
+    batchSize,
+    dataStreams: 19
   });
 
   let usersProcessed = 0;
@@ -42,16 +41,20 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
   let errors = 0;
 
   try {
-    // Always fetch users from GitLab to get gitlabIds directly from source
-    logger.info('Fetching users from GitLab to get gitlabIds');
     const gitlabUsers = await gitlabUserProcessor.fetchSimpleUsers(batchSize);
 
-    // Convert GitLab users to our expected format with proper gitlabIds
-    const usersToProcess = gitlabUsers.map((gitlabUser: any) => ({
-      gitlabId: parseInt(gitlabUser.id), // GitLab IDs are strings but we store as numbers
-      username: gitlabUser.username,
-      email: gitlabUser.email
-    }));
+    // Convert GitLab users to our expected format
+    const usersToProcess = gitlabUsers.map((gitlabUser: any) => {
+      // Extract numeric ID from GraphQL global ID format
+      const idMatch = gitlabUser.id.match(/\d+$/);
+      const numericId = idMatch ? parseInt(idMatch[0]) : parseInt(gitlabUser.id);
+      
+      return {
+        gitlabId: numericId,
+        username: gitlabUser.username,
+        email: gitlabUser.email
+      };
+    });
 
     logger.info('Users to process from GitLab', {
       totalUsers: usersToProcess.length
@@ -95,84 +98,108 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
           const existingUser = await User.findOne({ gitlabId: user.gitlabId }).lean();
 
           if (existingUser) {
-            // Fetch comprehensive data from GitLab
+            // Fetch comprehensive data from GitLab (all 19 query streams)
             const gitlabUserDataRaw = await gitlabUserProcessor.fetchUserData([user.gitlabId]);
 
             if (gitlabUserDataRaw?.data?.users?.length > 0) {
               const gitlabData = gitlabUserDataRaw.data.users[0];
 
-              // Prepare updates for User model
+              // Prepare updates for User model - ALL VALIDATED FIELDS
               const userUpdates: Partial<IUser> = {
                 lastSynced: moment().toDate()
               };
 
-              // Core fields with fallbacks
               if (gitlabData.name) userUpdates.name = gitlabData.name.trim();
               if (gitlabData.email) userUpdates.email = gitlabData.email.toLowerCase().trim();
               if (gitlabData.username) userUpdates.username = gitlabData.username.trim();
               if (gitlabData.avatarUrl) userUpdates.avatar = gitlabData.avatarUrl;
+              if (gitlabData.publicEmail) userUpdates.publicEmail = gitlabData.publicEmail;
+              if (gitlabData.webUrl) userUpdates.webUrl = gitlabData.webUrl;
 
-              // Status mapping
-              const isLocked = gitlabData.isLocked || false;
-              userUpdates.status = isLocked ? 'inactive' : 'active';
+              // Status mapping (from 'state' and 'active' fields)
+              if (gitlabData.state === 'blocked' || gitlabData.active === false) {
+                userUpdates.status = 'inactive';
+                userUpdates.isActive = false;
+              } else if (gitlabData.state === 'active' && gitlabData.active === true) {
+                userUpdates.status = 'active';
+                userUpdates.isActive = true;
+              }
 
-              // Department
-              userUpdates.department = gitlabData.department || gitlabData.organization || existingUser.department;
-
-              // Role
-              userUpdates.role = gitlabData.jobTitle || existingUser.role || 'Developer';
+              // Activity count (groupCount is available)
+              if (typeof gitlabData.groupCount === 'number') {
+                userUpdates.groupCount = gitlabData.groupCount;
+              }
 
               // Join date (only if not set)
               if (!existingUser.joinDate && gitlabData.createdAt) {
                 userUpdates.joinDate = moment(gitlabData.createdAt).toDate();
               }
 
-              // isActive
-              userUpdates.isActive = !isLocked;
+              if (gitlabData.bio) userUpdates.bio = gitlabData.bio;
+              if (gitlabData.location) userUpdates.location = gitlabData.location;
+              if (gitlabData.pronouns) userUpdates.pronouns = gitlabData.pronouns;
+              if (gitlabData.organization) userUpdates.department = gitlabData.organization;
+              if (gitlabData.jobTitle) userUpdates.role = gitlabData.jobTitle;
+              if (gitlabData.linkedin) userUpdates.linkedin = gitlabData.linkedin;
+              if (gitlabData.twitter) userUpdates.twitter = gitlabData.twitter;
+              if (gitlabData.discord) userUpdates.discord = gitlabData.discord;
 
-              // assignedRepos array (from authorizedProjects)
-              if (gitlabData.authorizedProjects?.nodes) {
-                userUpdates.assignedRepos = gitlabData.authorizedProjects.nodes
-                  .filter((proj: any) => proj.permissions?.readProject) // Filter by read permission
-                  .map((proj: any) => proj.fullPath); // Use fullPath, not pathWithNamespace
+              // Role fallback
+              if (!userUpdates.role) {
+                userUpdates.role = existingUser.role || 'Developer';
               }
 
-              // projects array
-              if (gitlabData.projectMemberships?.nodes) {
-                const projectsData = gitlabData.projectMemberships.nodes.map((mem: any) => ({
-                  id: mem.project.id.toString(),
-                  name: mem.project.name,
-                  role: mapAccessLevel(mem.accessLevel)
-                }));
-                userUpdates.projects = projectsData;
+              if (gitlabData.projectMemberships?.length > 0) {
+                const projectsData = gitlabData.projectMemberships
+                  .filter((mem: any) => mem?.project?.id)
+                  .map((mem: any) => ({
+                    id: mem.project.id.toString(),
+                    name: mem.project.name || 'Unknown',
+                    role: mapAccessLevel(mem.accessLevel?.integerValue || 30)
+                  }));
+                
+                if (projectsData.length > 0) {
+                  userUpdates.projects = projectsData;
+                  
+                  // Also update assignedRepos from project memberships
+                  userUpdates.assignedRepos = gitlabData.projectMemberships
+                    .filter((mem: any) => mem?.project?.fullPath)
+                    .map((mem: any) => mem.project.fullPath);
+                }
               }
 
-              // skills array (inferred from GitLab activity)
               const inferredSkills = new Set<string>();
               
-              // Add skills from starred projects (interests/expertise)
-              if (gitlabData.starredProjects?.nodes) {
-                gitlabData.starredProjects.nodes.forEach((proj: any) => {
-                  if (proj.topics && Array.isArray(proj.topics)) {
-                    proj.topics.forEach((topic: string) => inferredSkills.add(topic));
-                  }
-                });
-              }
-              
-              // Add skills from authored snippets (language expertise)
-              if (gitlabData.snippets?.nodes) {
-                gitlabData.snippets.nodes.forEach((snippet: any) => {
-                  if (snippet.language) {
-                    inferredSkills.add(snippet.language);
-                  }
-                });
+              // Infer from job title
+              if (gitlabData.jobTitle) {
+                const jobKeywords = gitlabData.jobTitle.toLowerCase();
+                if (jobKeywords.includes('frontend')) inferredSkills.add('Frontend');
+                if (jobKeywords.includes('backend')) inferredSkills.add('Backend');
+                if (jobKeywords.includes('fullstack') || jobKeywords.includes('full stack')) {
+                  inferredSkills.add('Frontend');
+                  inferredSkills.add('Backend');
+                }
+                if (jobKeywords.includes('devops')) inferredSkills.add('DevOps');
+                if (jobKeywords.includes('senior')) inferredSkills.add('Leadership');
+                if (jobKeywords.includes('lead') || jobKeywords.includes('manager')) {
+                  inferredSkills.add('Management');
+                }
               }
 
-              // Add skills from project memberships (current tech stack)
-              if (gitlabData.projectMemberships?.nodes) {
-                gitlabData.projectMemberships.nodes.forEach((mem: any) => {
-                  if (mem.project?.topics && Array.isArray(mem.project.topics)) {
-                    mem.project.topics.forEach((topic: string) => inferredSkills.add(topic));
+              // Infer from starred projects (if available)
+              if (gitlabData.starredProjects?.length > 0) {
+                gitlabData.starredProjects.slice(0, 10).forEach((proj: any) => {
+                  if (proj.name) {
+                    const projName = proj.name.toLowerCase();
+                    if (projName.includes('react') || projName.includes('vue') || projName.includes('angular')) {
+                      inferredSkills.add('Frontend');
+                    }
+                    if (projName.includes('node') || projName.includes('express') || projName.includes('api')) {
+                      inferredSkills.add('Backend');
+                    }
+                    if (projName.includes('docker') || projName.includes('kubernetes')) {
+                      inferredSkills.add('DevOps');
+                    }
                   }
                 });
               }
@@ -181,60 +208,6 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               if (inferredSkills.size > 0) {
                 userUpdates.skills = Array.from(inferredSkills).slice(0, 15);
               }
-
-              // Contact & Social Information
-              if (gitlabData.skype) userUpdates.skype = gitlabData.skype;
-              if (gitlabData.linkedin) userUpdates.linkedin = gitlabData.linkedin;
-              if (gitlabData.twitter) userUpdates.twitter = gitlabData.twitter;
-              if (gitlabData.discord) userUpdates.discord = gitlabData.discord;
-              if (gitlabData.websiteUrl) userUpdates.websiteUrl = gitlabData.websiteUrl;
-              if (gitlabData.workInformation) userUpdates.workInformation = gitlabData.workInformation;
-              if (gitlabData.localTime) userUpdates.localTime = gitlabData.localTime;
-              if (gitlabData.birthday) userUpdates.birthday = moment(gitlabData.birthday).toDate();
-              if (gitlabData.hireDate) userUpdates.hireDate = moment(gitlabData.hireDate).toDate();
-              if (gitlabData.terminationDate) userUpdates.terminationDate = moment(gitlabData.terminationDate).toDate();
-              if (gitlabData.language) userUpdates.language = gitlabData.language;
-              if (gitlabData.theme) userUpdates.theme = gitlabData.theme;
-              if (gitlabData.bio) userUpdates.bio = gitlabData.bio;
-              if (gitlabData.location) userUpdates.location = gitlabData.location;
-              if (gitlabData.pronouns) userUpdates.pronouns = gitlabData.pronouns;
-              if (gitlabData.publicEmail) userUpdates.publicEmail = gitlabData.publicEmail;
-              if (gitlabData.webUrl) userUpdates.webUrl = gitlabData.webUrl;
-
-              // Activity Statistics
-              if (typeof gitlabData.groupCount === 'number') userUpdates.groupCount = gitlabData.groupCount;
-              if (typeof gitlabData.projectCount === 'number') userUpdates.projectCount = gitlabData.projectCount;
-              if (typeof gitlabData.contributionsCount === 'number') userUpdates.contributionsCount = gitlabData.contributionsCount;
-              if (typeof gitlabData.discussionsCount === 'number') userUpdates.discussionsCount = gitlabData.discussionsCount;
-              if (typeof gitlabData.issuesCreatedCount === 'number') userUpdates.issuesCreatedCount = gitlabData.issuesCreatedCount;
-              if (typeof gitlabData.mergeRequestsCount === 'number') userUpdates.mergeRequestsCount = gitlabData.mergeRequestsCount;
-              if (typeof gitlabData.commitsCount === 'number') userUpdates.commitsCount = gitlabData.commitsCount;
-
-              // Security & Access Control
-              if (typeof gitlabData.twoFactorEnabled === 'boolean') userUpdates.twoFactorEnabled = gitlabData.twoFactorEnabled;
-              if (gitlabData.lockedAt) userUpdates.lockedAt = moment(gitlabData.lockedAt).toDate();
-              if (gitlabData.unlockAt) userUpdates.unlockAt = moment(gitlabData.unlockAt).toDate();
-              if (gitlabData.authenticationType) userUpdates.authenticationType = gitlabData.authenticationType;
-              if (typeof gitlabData.emailVerified === 'boolean') userUpdates.emailVerified = gitlabData.emailVerified;
-              if (typeof gitlabData.phoneVerified === 'boolean') userUpdates.phoneVerified = gitlabData.phoneVerified;
-
-              // Organization & Management
-              if (gitlabData.manager) {
-                userUpdates.manager = {
-                  id: gitlabData.manager.id?.toString() || '',
-                  name: gitlabData.manager.name || '',
-                  email: gitlabData.manager.email
-                };
-              }
-              if (gitlabData.reportsTo) {
-                userUpdates.reportsTo = {
-                  id: gitlabData.reportsTo.id?.toString() || '',
-                  name: gitlabData.reportsTo.name || '',
-                  email: gitlabData.reportsTo.email
-                };
-              }
-              if (gitlabData.costCenter) userUpdates.costCenter = gitlabData.costCenter;
-              if (gitlabData.employeeNumber) userUpdates.employeeNumber = gitlabData.employeeNumber;
 
               // Update User
               const updatedUser = await User.findByIdAndUpdate(
@@ -250,13 +223,16 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
 
               usersUpdated++;
 
-              logger.debug('User updated comprehensively', {
+              logger.debug('User updated with comprehensive data from all streams', {
                 userId: updatedUser._id,
                 gitlabId: user.gitlabId,
-                updatedFields: Object.keys(userUpdates).length - 1 // Exclude lastSynced
+                updatedFields: Object.keys(userUpdates).length - 1,
+                hasProjectMemberships: !!gitlabData.projectMemberships?.length,
+                hasMergeRequests: !!(gitlabData.authoredMergeRequests?.length || gitlabData.assignedMergeRequests?.length),
+                hasSnippets: !!gitlabData.snippets?.length,
+                hasTimelogs: !!gitlabData.timelogs?.length
               });
 
-              // Bulk updates for related models
               const bulkOps: any[] = [];
 
               // Project: Update assignedTo
@@ -267,7 +243,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                     $set: {
                       'assignedTo.$[elem].name': userUpdates.name || gitlabData.name,
                       'assignedTo.$[elem].department': userUpdates.department,
-                      'assignedTo.$[elem].role': 'Developer' // Simplified
+                      'assignedTo.$[elem].role': userUpdates.role || 'Developer'
                     }
                   },
                   arrayFilters: [{ 'elem.id': user.gitlabId.toString() }]
@@ -402,15 +378,14 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
 
               // Execute distributed bulk writes
               try {
-                // Build separate operation arrays for each model
-                const projectOps = [bulkOps[0]]; // Project assignedTo update
-                const issueOps = [bulkOps[1], bulkOps[2]]; // Issue author and assignees
-                const mergeRequestOps = [bulkOps[3], bulkOps[4], bulkOps[5]]; // MR author, assignees, reviewers
-                const taskOps = [bulkOps[6], bulkOps[7]]; // Task assignedTo and assignedBy
-                const commitOps = [bulkOps[8]]; // Commit author
-                const deptOps = [bulkOps[9]]; // Department head
+                const projectOps = [bulkOps[0]];
+                const issueOps = [bulkOps[1], bulkOps[2]];
+                const mergeRequestOps = [bulkOps[3], bulkOps[4], bulkOps[5]];
+                const taskOps = [bulkOps[6], bulkOps[7]];
+                const commitOps = [bulkOps[8]];
+                const deptOps = [bulkOps[9]];
 
-                // Execute each model's operations if they exist
+                // Execute each model's operations
                 if (projectOps.length > 0) await Project.bulkWrite(projectOps);
                 if (issueOps.length > 0) await Issue.bulkWrite(issueOps);
                 if (mergeRequestOps.length > 0) await MergeRequest.bulkWrite(mergeRequestOps);
@@ -418,7 +393,10 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 if (commitOps.length > 0) await Commit.bulkWrite(commitOps);
                 if (deptOps.length > 0) await Department.bulkWrite(deptOps);
 
-                logger.debug('Related models updated', { userId: updatedUser._id, gitlabId: user.gitlabId });
+                logger.debug('Related models updated', { 
+                  userId: updatedUser._id, 
+                  gitlabId: user.gitlabId 
+                });
               } catch (bulkError: unknown) {
                 logger.error('Bulk update error', { 
                   userId: updatedUser._id, 
@@ -434,12 +412,11 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               });
             }
           } else {
-            // User doesn't exist in database - this is expected for new GitLab users
+            // User doesn't exist in database
             logger.info('GitLab user not found in database, skipping sync', {
               gitlabId: user.gitlabId,
               username: user.username
             });
-            // Note: We could create the user here if needed, but for now we just log and skip
           }
         } catch (error: unknown) {
           errors++;
@@ -467,7 +444,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
       timestamp: moment().format('YYYY-MM-DDTHH:mm:ss.SSS')
     };
 
-    logger.info('User sync job completed successfully', result);
+    logger.info('User sync job completed successfully with all data streams', result);
 
     return result;
   } catch (error: unknown) {
@@ -479,7 +456,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
       errors
     });
 
-    throw error; // Re-throw to mark job as failed
+    throw error;
   }
 };
 
