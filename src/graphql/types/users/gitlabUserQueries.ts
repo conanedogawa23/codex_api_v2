@@ -1,77 +1,101 @@
 /**
- * GitLab GraphQL Query Definitions - CORRECTED VERSION
- * Only includes fields that are actually available in the GitLab instance
- * Generated based on schema introspection on 2025-10-15
+ * GitLab GraphQL Query Definitions
+ * Comprehensive collection of GraphQL queries for fetching user data from GitLab
  */
 
-// Core user identity information (corrected)
+// Core user identity information
 export const CORE_IDENTITY_QUERY = `
   query GetUserCoreIdentity($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
         username
-        publicEmail
+        email
         name
         avatarUrl
         webUrl
-        webPath
         createdAt
+        publicEmail
         location
         bio
         pronouns
         bot
         state
+        verificationState
+        emailVerified
+        phoneVerified
         commitEmail
+        canCreateGroup
+        canCreateProject
         lastActivityOn
+        lastSignInAt
       }
     }
   }
 `;
 
-// Contact and social information (corrected)
+// Contact and social information
 export const CONTACT_SOCIAL_QUERY = `
   query GetUserContactSocial($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
+        skype
         linkedin
         twitter
         discord
+        websiteUrl
         organization
         jobTitle
+        workInformation
+        localTime
         status {
           availability
           emoji
           message
           messageHtml
         }
-        userPreferences {
-          issuesSort
-          visibilityPipelineIdType
+        preferences {
+          visibilityLevel
+          activityViewLimit
+          timezone
+        }
+        birthday
+        hireDate
+        terminationDate
+        dashboard
+        theme
+        language
+        notificationSettings {
+          email
+          push
+          slack
         }
       }
     }
   }
 `;
 
-// Activity statistics (corrected - using available relationships)
+// Activity statistics
 export const ACTIVITY_STATS_QUERY = `
   query GetUserActivityStats($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
         groupCount
+        projectCount
+        contributionsCount
+        discussionsCount
+        issuesCreatedCount
+        mergeRequestsCount
+        commitsCount
         starredProjects(first: 10) {
           nodes {
             id
             name
             fullPath
             visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
+            lastActivityAt
           }
         }
         snippets(first: 5) {
@@ -79,36 +103,24 @@ export const ACTIVITY_STATS_QUERY = `
             id
             title
             description
+            visibility
             createdAt
           }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
         }
-        authoredMergeRequests(first: 10) {
+        authoredMergeRequests(first: 5) {
           nodes {
             id
-            iid
             title
             state
             createdAt
           }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
         }
-        contributedProjects(first: 10) {
+        authoredIssues(first: 5) {
           nodes {
             id
-            name
-            fullPath
-            visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
+            title
+            state
+            createdAt
           }
         }
       }
@@ -116,37 +128,42 @@ export const ACTIVITY_STATS_QUERY = `
   }
 `;
 
-// Social connections (corrected)
+// Social connections
 export const SOCIAL_CONNECTIONS_QUERY = `
   query GetUserSocialConnections($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
-        groups(first: 20) {
+        followers(first: 20) {
+          nodes {
+            id
+            username
+            name
+            avatarUrl
+          }
+        }
+        following(first: 20) {
+          nodes {
+            id
+            username
+            name
+            avatarUrl
+          }
+        }
+        groups(first: 10) {
           nodes {
             id
             name
             fullPath
             visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
+            createdAt
           }
         }
-        groupMemberships(first: 20) {
+        authoredDiscussions(first: 5) {
           nodes {
             id
-            group {
-              id
-              name
-              fullPath
-              visibility
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
+            title
+            createdAt
           }
         }
       }
@@ -154,14 +171,30 @@ export const SOCIAL_CONNECTIONS_QUERY = `
   }
 `;
 
-// Security and access control (corrected)
+// Security and access control
 export const SECURITY_ACCESS_QUERY = `
   query GetUserSecurityAccess($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
+        isLocked
+        lockedAt
+        unlockAt
+        twoFactorEnabled
         userPermissions {
           createSnippet
+          adminNote
+          adminUser
+          createGroup
+          createProject
+        }
+        identities(first: 10) {
+          nodes {
+            id
+            provider
+            externUid
+            samlProviderId
+          }
         }
         namespace {
           id
@@ -170,19 +203,32 @@ export const SECURITY_ACCESS_QUERY = `
           fullPath
           visibility
         }
-        projectMemberships(first: 20) {
+        authorizedProjects(first: 10) {
           nodes {
             id
-            project {
-              id
-              name
-              fullPath
-              visibility
+            name
+            fullPath
+            permissions {
+              readProject
+              writeProject
+              adminProject
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
+        }
+        authenticationType
+        samlProvider {
+          name
+          issuer
+        }
+        ldapInfo {
+          dn
+          provider
+        }
+        oauthApplications {
+          nodes {
+            name
+            scopes
+            createdAt
           }
         }
       }
@@ -190,13 +236,13 @@ export const SECURITY_ACCESS_QUERY = `
   }
 `;
 
-// Development activity (corrected)
+// Development activity
 export const DEVELOPMENT_ACTIVITY_QUERY = `
   query GetUserDevelopmentActivity($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
-        authoredMergeRequests(first: 20) {
+        authoredMergeRequests(first: 10) {
           nodes {
             id
             iid
@@ -215,12 +261,8 @@ export const DEVELOPMENT_ACTIVITY_QUERY = `
               fullPath
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
         }
-        reviewRequestedMergeRequests(first: 20) {
+        reviewRequestedMergeRequests(first: 10) {
           nodes {
             id
             iid
@@ -233,12 +275,24 @@ export const DEVELOPMENT_ACTIVITY_QUERY = `
               fullPath
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
+        }
+        authoredIssues(first: 10) {
+          nodes {
+            id
+            iid
+            title
+            description
+            state
+            createdAt
+            updatedAt
+            project {
+              id
+              name
+              fullPath
+            }
           }
         }
-        assignedMergeRequests(first: 20) {
+        assignedIssues(first: 10) {
           nodes {
             id
             iid
@@ -250,10 +304,6 @@ export const DEVELOPMENT_ACTIVITY_QUERY = `
               name
               fullPath
             }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
           }
         }
       }
@@ -261,13 +311,127 @@ export const DEVELOPMENT_ACTIVITY_QUERY = `
   }
 `;
 
-// Time tracking (corrected)
+// Collaboration and communication
+export const COLLABORATION_QUERY = `
+  query GetUserCollaboration($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        authoredNotes(first: 10) {
+          nodes {
+            id
+            body
+            noteableType
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        authoredDiscussions(first: 10) {
+          nodes {
+            id
+            title
+            replyId
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        authoredCommits(first: 10) {
+          nodes {
+            id
+            title
+            message
+            authoredDate
+            committedDate
+            project {
+              id
+              name
+              fullPath
+            }
+          }
+        }
+        todos(first: 10) {
+          nodes {
+            id
+            state
+            targetType
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Assets and content
+export const ASSETS_CONTENT_QUERY = `
+  query GetUserAssetsContent($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        authoredSnippets(first: 10) {
+          nodes {
+            id
+            title
+            description
+            visibility
+            createdAt
+            updatedAt
+          }
+        }
+        authoredEpicNotes(first: 5) {
+          nodes {
+            id
+            body
+            createdAt
+            epic {
+              id
+              title
+            }
+          }
+        }
+        authoredVulnerabilityNotes(first: 5) {
+          nodes {
+            id
+            body
+            createdAt
+            vulnerability {
+              id
+              title
+            }
+          }
+        }
+        awardEmojis(first: 10) {
+          nodes {
+            id
+            name
+            description
+            unicode
+            awardableType
+            awardableId
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Time tracking and productivity
 export const TIME_TRACKING_QUERY = `
   query GetUserTimeTracking($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
-        timelogs(first: 20) {
+        timelogs(first: 10) {
           nodes {
             id
             timeSpent
@@ -284,9 +448,22 @@ export const TIME_TRACKING_QUERY = `
               iid
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
+        }
+        authoredTimelogs(first: 10) {
+          nodes {
+            id
+            timeSpent
+            spentAt
+            summary
+          }
+        }
+        recentActivity(first: 15) {
+          nodes {
+            id
+            action
+            targetType
+            targetTitle
+            createdAt
           }
         }
       }
@@ -294,57 +471,154 @@ export const TIME_TRACKING_QUERY = `
   }
 `;
 
-// User todos (corrected)
-export const USER_TODOS_QUERY = `
-  query GetUserTodos($ids: [ID!]!) {
+// Advanced relationships
+export const ADVANCED_RELATIONSHIPS_QUERY = `
+  query GetUserAdvancedRelationships($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
-        todos(first: 20) {
+        authoredEpics(first: 5) {
           nodes {
             id
+            iid
+            title
+            description
             state
-            targetType
+            createdAt
+            group {
+              id
+              name
+              fullPath
+            }
+          }
+        }
+        assignedEpics(first: 5) {
+          nodes {
+            id
+            iid
+            title
+            state
+            group {
+              id
+              name
+              fullPath
+            }
+          }
+        }
+        authoredRequirements(first: 5) {
+          nodes {
+            id
+            iid
+            title
+            state
+            project {
+              id
+              name
+            }
+          }
+        }
+        assignedRequirements(first: 5) {
+          nodes {
+            id
+            iid
+            title
+            state
+            project {
+              id
+              name
+            }
+          }
+        }
+        authoredTestCases(first: 5) {
+          nodes {
+            id
+            title
+            state
+            project {
+              id
+              name
+            }
+          }
+        }
+        assignedTestCases(first: 5) {
+          nodes {
+            id
+            title
+            state
+            project {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Deployment and release activity
+export const DEPLOYMENT_RELEASE_QUERY = `
+  query GetUserDeploymentRelease($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        authoredReleases(first: 5) {
+          nodes {
+            id
+            tagName
+            name
+            description
+            createdAt
+            project {
+              id
+              name
+              fullPath
+            }
+          }
+        }
+        deployments(first: 10) {
+          nodes {
+            id
+            iid
+            ref
+            sha
+            status
+            createdAt
+            updatedAt
+            environment {
+              id
+              name
+              tier
+            }
+            project {
+              id
+              name
+            }
+          }
+        }
+        authoredPackages(first: 5) {
+          nodes {
+            id
+            name
+            packageType
             createdAt
             project {
               id
               name
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
         }
-      }
-    }
-  }
-`;
-
-// User snippets (corrected)
-export const USER_SNIPPETS_QUERY = `
-  query GetUserSnippets($ids: [ID!]!) {
-    users(ids: $ids) {
-      nodes {
-        id
-        snippets(first: 20) {
+        authoredVulnerabilities(first: 5) {
           nodes {
             id
             title
-            description
+            state
+            severity
             createdAt
-            updatedAt
-            blobs {
-              nodes {
-                name
-                path
-                size
-              }
+            project {
+              id
+              name
             }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
           }
         }
       }
@@ -352,20 +626,225 @@ export const USER_SNIPPETS_QUERY = `
   }
 `;
 
-// User emails (corrected - alternative to missing 'email' field)
-export const USER_EMAILS_QUERY = `
-  query GetUserEmails($ids: [ID!]!) {
+// Organization and permissions
+export const ORGANIZATION_PERMISSIONS_QUERY = `
+  query GetUserOrganizationPermissions($ids: [ID!]!) {
     users(ids: $ids) {
       nodes {
         id
-        publicEmail
-        commitEmail
-        emails {
+        namespace {
+          id
+          name
+          path
+          fullPath
+          visibility
+          kind
+          members {
+            nodes {
+              id
+              accessLevel
+              expiresAt
+            }
+          }
+        }
+        groupMemberships(first: 20) {
           nodes {
             id
-            email
-            confirmedAt
+            accessLevel
+            expiresAt
+            group {
+              id
+              name
+              fullPath
+              visibility
+            }
           }
+        }
+        projectMemberships(first: 20) {
+          nodes {
+            id
+            accessLevel
+            expiresAt
+            project {
+              id
+              name
+              fullPath
+              visibility
+            }
+          }
+        }
+        impersonationTokens(first: 10) {
+          nodes {
+            id
+            name
+            scopes
+            expiresAt
+            active
+          }
+        }
+        manager {
+          id
+          username
+          name
+        }
+        reportsTo {
+          id
+          username
+          name
+        }
+        department
+        costCenter
+        employeeNumber
+      }
+    }
+  }
+`;
+
+// User interactions
+export const USER_INTERACTIONS_QUERY = `
+  query GetUserInteractions($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        blockedUsers(first: 10) {
+          nodes {
+            id
+            username
+            name
+          }
+        }
+        mutedUsers(first: 10) {
+          nodes {
+            id
+            username
+            name
+          }
+        }
+        watchedProjects(first: 10) {
+          nodes {
+            id
+            name
+            fullPath
+          }
+        }
+        followedGroups(first: 10) {
+          nodes {
+            id
+            name
+            fullPath
+          }
+        }
+        mentionedInNotes(first: 10) {
+          nodes {
+            id
+            body
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        mentionedInIssues(first: 10) {
+          nodes {
+            id
+            title
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// User reviews
+export const USER_REVIEWS_QUERY = `
+  query GetUserReviews($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        reviewedMergeRequests(first: 10) {
+          nodes {
+            id
+            iid
+            title
+            state
+            reviewState
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        approvedMergeRequests(first: 10) {
+          nodes {
+            id
+            iid
+            title
+            state
+            approvedAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        rejectedMergeRequests(first: 10) {
+          nodes {
+            id
+            iid
+            title
+            state
+            rejectedAt
+            project {
+              id
+              name
+            }
+          }
+        }
+        commentedMergeRequests(first: 10) {
+          nodes {
+            id
+            iid
+            title
+            state
+            createdAt
+            project {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// User productivity and work schedule
+export const USER_PRODUCTIVITY_QUERY = `
+  query GetUserProductivity($ids: [ID!]!) {
+    users(ids: $ids) {
+      nodes {
+        id
+        timeTrackingEnabled
+        weeklyHours
+        overtimeHours
+        vacationDays
+        sickDays
+        personalDays
+        workSchedule {
+          monday
+          tuesday
+          wednesday
+          thursday
+          friday
+          saturday
+          sunday
         }
       }
     }
@@ -379,7 +858,7 @@ export const SIMPLE_USERS_QUERY = `
       nodes {
         id
         username
-        publicEmail
+        email
         name
         state
         createdAt
@@ -392,217 +871,22 @@ export const SIMPLE_USERS_QUERY = `
   }
 `;
 
-// Comprehensive user query with all available fields
-export const COMPREHENSIVE_USER_QUERY = `
-  query GetComprehensiveUser($ids: [ID!]!) {
-    users(ids: $ids) {
-      nodes {
-        id
-        username
-        name
-        publicEmail
-        avatarUrl
-        webUrl
-        webPath
-        createdAt
-        bot
-        human
-        active
-        state
-        bio
-        location
-        pronouns
-        organization
-        jobTitle
-        linkedin
-        twitter
-        discord
-        commitEmail
-        lastActivityOn
-        status {
-          availability
-          emoji
-          message
-          messageHtml
-        }
-        groupCount
-        userPermissions {
-          createSnippet
-        }
-        userPreferences {
-          issuesSort
-          visibilityPipelineIdType
-        }
-        namespace {
-          id
-          name
-          path
-          fullPath
-          visibility
-        }
-        emails {
-          nodes {
-            id
-            email
-            confirmedAt
-          }
-        }
-        groups(first: 10) {
-          nodes {
-            id
-            name
-            fullPath
-            visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        groupMemberships(first: 10) {
-          nodes {
-            id
-            group {
-              id
-              name
-              fullPath
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        projectMemberships(first: 10) {
-          nodes {
-            id
-            project {
-              id
-              name
-              fullPath
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        authoredMergeRequests(first: 5) {
-          nodes {
-            id
-            iid
-            title
-            state
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        assignedMergeRequests(first: 5) {
-          nodes {
-            id
-            iid
-            title
-            state
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        reviewRequestedMergeRequests(first: 5) {
-          nodes {
-            id
-            iid
-            title
-            state
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        starredProjects(first: 5) {
-          nodes {
-            id
-            name
-            fullPath
-            visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        contributedProjects(first: 5) {
-          nodes {
-            id
-            name
-            fullPath
-            visibility
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        snippets(first: 5) {
-          nodes {
-            id
-            title
-            description
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        timelogs(first: 5) {
-          nodes {
-            id
-            timeSpent
-            spentAt
-            summary
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-        todos(first: 5) {
-          nodes {
-            id
-            state
-            targetType
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  }
-`;
-
 // Export all queries as a collection
-export const GITLAB_USER_QUERIES_CORRECTED = {
+export const GITLAB_USER_QUERIES = {
   CORE_IDENTITY: CORE_IDENTITY_QUERY,
   CONTACT_SOCIAL: CONTACT_SOCIAL_QUERY,
   ACTIVITY_STATS: ACTIVITY_STATS_QUERY,
   SOCIAL_CONNECTIONS: SOCIAL_CONNECTIONS_QUERY,
   SECURITY_ACCESS: SECURITY_ACCESS_QUERY,
   DEVELOPMENT_ACTIVITY: DEVELOPMENT_ACTIVITY_QUERY,
+  COLLABORATION: COLLABORATION_QUERY,
+  ASSETS_CONTENT: ASSETS_CONTENT_QUERY,
   TIME_TRACKING: TIME_TRACKING_QUERY,
-  USER_TODOS: USER_TODOS_QUERY,
-  USER_SNIPPETS: USER_SNIPPETS_QUERY,
-  USER_EMAILS: USER_EMAILS_QUERY,
+  ADVANCED_RELATIONSHIPS: ADVANCED_RELATIONSHIPS_QUERY,
+  DEPLOYMENT_RELEASE: DEPLOYMENT_RELEASE_QUERY,
+  ORGANIZATION_PERMISSIONS: ORGANIZATION_PERMISSIONS_QUERY,
+  USER_INTERACTIONS: USER_INTERACTIONS_QUERY,
+  USER_REVIEWS: USER_REVIEWS_QUERY,
+  USER_PRODUCTIVITY: USER_PRODUCTIVITY_QUERY,
   SIMPLE_USERS: SIMPLE_USERS_QUERY,
-  COMPREHENSIVE: COMPREHENSIVE_USER_QUERY,
 } as const;
