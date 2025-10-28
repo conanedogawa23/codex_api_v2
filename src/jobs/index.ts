@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger';
-import { closeQueues } from './config/queue';
+import { closeQueues, issueSyncQueue, mergeRequestSyncQueue, namespaceSyncQueue } from './config/queue';
 import {
   initializeUserSyncScheduler,
   triggerImmediateSync,
@@ -16,6 +16,12 @@ import {
   resumeProjectSyncScheduler,
   cleanupOldJobs as cleanupProjectOldJobs,
 } from './schedulers/projectSync.scheduler';
+import { IssueSyncScheduler } from './schedulers/issueSync.scheduler';
+import { MergeRequestSyncScheduler } from './schedulers/mergeRequestSync.scheduler';
+import { NamespaceSyncScheduler } from './schedulers/namespaceSync.scheduler';
+import { processIssueSync } from './processors/issues/issueSync.processor';
+import { processMergeRequestSync } from './processors/mergeRequests/mergeRequestSync.processor';
+import { processNamespaceSync } from './processors/namespaces/namespaceSync.processor';
 
 /**
  * Job Manager
@@ -24,6 +30,9 @@ import {
 export class JobManager {
   private static instance: JobManager;
   private isInitialized: boolean = false;
+  private issueSyncScheduler?: IssueSyncScheduler;
+  private mergeRequestSyncScheduler?: MergeRequestSyncScheduler;
+  private namespaceSyncScheduler?: NamespaceSyncScheduler;
 
   private constructor() {}
 
@@ -52,9 +61,23 @@ export class JobManager {
       // Initialize project sync scheduler
       await initializeProjectSyncScheduler();
 
-      // Add more schedulers here as needed
-      // await initializeIssueSyncScheduler();
-      // await initializeMergeRequestSyncScheduler();
+      // Initialize issue sync scheduler
+      this.issueSyncScheduler = new IssueSyncScheduler(issueSyncQueue);
+      issueSyncQueue.process(processIssueSync);
+      await this.issueSyncScheduler.scheduleRecurring();
+      logger.info('Issue sync scheduler initialized');
+
+      // Initialize merge request sync scheduler
+      this.mergeRequestSyncScheduler = new MergeRequestSyncScheduler(mergeRequestSyncQueue);
+      mergeRequestSyncQueue.process(processMergeRequestSync);
+      await this.mergeRequestSyncScheduler.scheduleRecurring();
+      logger.info('Merge request sync scheduler initialized');
+
+      // Initialize namespace sync scheduler
+      this.namespaceSyncScheduler = new NamespaceSyncScheduler(namespaceSyncQueue);
+      namespaceSyncQueue.process(processNamespaceSync);
+      await this.namespaceSyncScheduler.scheduleRecurring();
+      logger.info('Namespace sync scheduler initialized');
 
       this.isInitialized = true;
       logger.info('Job manager initialized successfully');
@@ -159,6 +182,27 @@ export class JobManager {
    */
   public async cleanupProjectJobs(gracePeriodHours: number = 24): Promise<void> {
     return cleanupProjectOldJobs(gracePeriodHours);
+  }
+
+  /**
+   * Trigger manual issue sync
+   */
+  public async triggerIssueSync(): Promise<void> {
+    return this.issueSyncScheduler?.triggerManual();
+  }
+
+  /**
+   * Trigger manual merge request sync
+   */
+  public async triggerMergeRequestSync(): Promise<void> {
+    return this.mergeRequestSyncScheduler?.triggerManual();
+  }
+
+  /**
+   * Trigger manual namespace sync
+   */
+  public async triggerNamespaceSync(): Promise<void> {
+    return this.namespaceSyncScheduler?.triggerManual();
   }
 }
 
