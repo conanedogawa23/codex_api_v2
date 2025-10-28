@@ -79,7 +79,44 @@ export class GitlabUserProcessor {
       // Convert numeric IDs to GitLab GraphQL ID format
       const gitlabIds = userIds.map(id => `gid://gitlab/User/${id}`);
 
-      // Execute all 19 validated queries in parallel for maximum performance
+      // Execute all 19 validated queries independently with Promise.allSettled
+      // This ensures one failing query doesn't stop others from executing
+      const results = await Promise.allSettled([
+        // Identity & Profile queries
+        this.executeCategory('CORE_IDENTITY', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CORE_IDENTITY, { ids: gitlabIds })),
+        this.executeCategory('PROFILE_SOCIAL', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PROFILE_SOCIAL, { ids: gitlabIds })),
+        this.executeCategory('PERMISSIONS_STATUS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PERMISSIONS_STATUS, { ids: gitlabIds })),
+        this.executeCategory('NAMESPACE', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.NAMESPACE, { ids: gitlabIds })),
+        
+        // Membership queries
+        this.executeCategory('GROUP_MEMBERSHIPS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.GROUP_MEMBERSHIPS, { ids: gitlabIds })),
+        this.executeCategory('PROJECT_MEMBERSHIPS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PROJECT_MEMBERSHIPS, { ids: gitlabIds })),
+        this.executeCategory('GROUPS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.GROUPS, { ids: gitlabIds })),
+        
+        // Merge Request queries
+        this.executeCategory('AUTHORED_MERGE_REQUESTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.AUTHORED_MERGE_REQUESTS, { ids: gitlabIds })),
+        this.executeCategory('ASSIGNED_MERGE_REQUESTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.ASSIGNED_MERGE_REQUESTS, { ids: gitlabIds })),
+        this.executeCategory('REVIEW_REQUESTED_MERGE_REQUESTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.REVIEW_REQUESTED_MERGE_REQUESTS, { ids: gitlabIds })),
+        
+        // Project queries
+        this.executeCategory('STARRED_PROJECTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.STARRED_PROJECTS, { ids: gitlabIds })),
+        this.executeCategory('CONTRIBUTED_PROJECTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CONTRIBUTED_PROJECTS, { ids: gitlabIds })),
+        
+        // Content queries
+        this.executeCategory('SNIPPETS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.SNIPPETS, { ids: gitlabIds })),
+        this.executeCategory('SAVED_REPLIES', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.SAVED_REPLIES, { ids: gitlabIds })),
+        
+        // Time & Task queries
+        this.executeCategory('TIMELOGS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.TIMELOGS, { ids: gitlabIds })),
+        this.executeCategory('TODOS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.TODOS, { ids: gitlabIds })),
+        
+        // Settings queries
+        this.executeCategory('EMAILS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.EMAILS, { ids: gitlabIds })),
+        this.executeCategory('CALLOUTS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CALLOUTS, { ids: gitlabIds })),
+        this.executeCategory('NAMESPACE_COMMIT_EMAILS', gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.NAMESPACE_COMMIT_EMAILS, { ids: gitlabIds }))
+      ]);
+
+      // Extract results and log any failures
       const [
         coreIdentityResults,
         profileSocialResults,
@@ -94,48 +131,28 @@ export class GitlabUserProcessor {
         starredProjectsResults,
         contributedProjectsResults,
         snippetsResults,
+        savedRepliesResults,
         timelogsResults,
         todosResults,
         emailsResults,
         calloutsResults,
-        savedRepliesResults,
         namespaceCommitEmailsResults
-      ] = await Promise.all([
-        // Identity & Profile queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CORE_IDENTITY, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PROFILE_SOCIAL, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PERMISSIONS_STATUS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.NAMESPACE, { ids: gitlabIds }),
-        
-        // Membership queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.GROUP_MEMBERSHIPS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.PROJECT_MEMBERSHIPS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.GROUPS, { ids: gitlabIds }),
-        
-        // Merge Request queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.AUTHORED_MERGE_REQUESTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.ASSIGNED_MERGE_REQUESTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.REVIEW_REQUESTED_MERGE_REQUESTS, { ids: gitlabIds }),
-        
-        // Project queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.STARRED_PROJECTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CONTRIBUTED_PROJECTS, { ids: gitlabIds }),
-        
-        // Content queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.SNIPPETS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.SAVED_REPLIES, { ids: gitlabIds }),
-        
-        // Time & Task queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.TIMELOGS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.TODOS, { ids: gitlabIds }),
-        
-        // Settings queries
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.EMAILS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.CALLOUTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_USER_QUERIES.NAMESPACE_COMMIT_EMAILS, { ids: gitlabIds })
-      ]);
+      ] = results.map((result, index) => {
+        if (result.status === 'rejected') {
+          const categoryName = this.getCategoryName(index);
+          logger.error(`Failed to fetch ${categoryName} data`, {
+            error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
+            category: categoryName
+          });
+          return null;
+        }
+        return result.value;
+      });
 
-      logger.info('All 19 GitLab user data query streams completed successfully');
+      const successCount = results.filter(r => r.status === 'fulfilled').length;
+      const failureCount = results.filter(r => r.status === 'rejected').length;
+
+      logger.info(`GitLab user data query streams completed: ${successCount} succeeded, ${failureCount} failed`);
 
       // Merge all data streams using validated fields only
       const mergedData = this.mergeCompleteUserData(
@@ -280,6 +297,49 @@ export class GitlabUserProcessor {
    */
   private findUserData(queryResult: any, userId: string): any {
     return queryResult?.data?.users?.nodes?.find((user: any) => user?.id === userId);
+  }
+
+  /**
+   * Execute a category query with error handling
+   */
+  private async executeCategory(categoryName: string, queryPromise: Promise<any>): Promise<any> {
+    try {
+      return await queryPromise;
+    } catch (error: unknown) {
+      logger.error(`Failed to execute ${categoryName} query`, {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        category: categoryName
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get category name by index for logging
+   */
+  private getCategoryName(index: number): string {
+    const categories = [
+      'CORE_IDENTITY',
+      'PROFILE_SOCIAL',
+      'PERMISSIONS_STATUS',
+      'NAMESPACE',
+      'GROUP_MEMBERSHIPS',
+      'PROJECT_MEMBERSHIPS',
+      'GROUPS',
+      'AUTHORED_MERGE_REQUESTS',
+      'ASSIGNED_MERGE_REQUESTS',
+      'REVIEW_REQUESTED_MERGE_REQUESTS',
+      'STARRED_PROJECTS',
+      'CONTRIBUTED_PROJECTS',
+      'SNIPPETS',
+      'SAVED_REPLIES',
+      'TIMELOGS',
+      'TODOS',
+      'EMAILS',
+      'CALLOUTS',
+      'NAMESPACE_COMMIT_EMAILS'
+    ];
+    return categories[index] || `Unknown_${index}`;
   }
 }
 

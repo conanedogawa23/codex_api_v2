@@ -54,6 +54,18 @@ export interface IProject extends Document {
   lastActivityAt: Date;
   lastSynced: Date;
   isActive: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    members?: Date;
+    statistics?: Date;
+    repository?: Date;
+    cicdSettings?: Date;
+    containerRegistry?: Date;
+    releases?: Date;
+    mergeRequestSettings?: Date;
+  };
   
   // Instance methods
   updateSyncTimestamp(): Promise<IProject>;
@@ -232,6 +244,18 @@ const ProjectSchema: Schema = new Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    members: Date,
+    statistics: Date,
+    repository: Date,
+    cicdSettings: Date,
+    containerRegistry: Date,
+    releases: Date,
+    mergeRequestSettings: Date
   }
 }, {
   timestamps: true,

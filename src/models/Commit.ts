@@ -23,6 +23,14 @@ export interface ICommit extends Document {
   lastSyncedAt: Date;
   isDeleted: boolean;
   createdAt: Date;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    diffStats?: Date;
+    references?: Date;
+    signatures?: Date;
+  };
 }
 
 const CommitSchema: Schema = new Schema({
@@ -115,6 +123,14 @@ const CommitSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    diffStats: Date,
+    references: Date,
+    signatures: Date
   }
 }, {
   timestamps: { createdAt: true, updatedAt: false },

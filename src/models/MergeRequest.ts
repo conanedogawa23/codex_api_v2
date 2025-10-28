@@ -52,6 +52,18 @@ export interface IMergeRequest extends Document {
   firstDeployedToProductionAt?: Date;
   lastSynced: Date;
   isActive: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    reviewersAssignees?: Date;
+    approvals?: Date;
+    pipelines?: Date;
+    diffStats?: Date;
+    discussions?: Date;
+    commits?: Date;
+    changes?: Date;
+  };
 }
 
 const MergeRequestSchema: Schema = new Schema({
@@ -184,6 +196,18 @@ const MergeRequestSchema: Schema = new Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    reviewersAssignees: Date,
+    approvals: Date,
+    pipelines: Date,
+    diffStats: Date,
+    discussions: Date,
+    commits: Date,
+    changes: Date
   }
 }, {
   timestamps: true,

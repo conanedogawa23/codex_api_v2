@@ -21,6 +21,12 @@ export interface INote extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    reactions?: Date;
+  };
   
   // Instance methods
   resolve(userId: mongoose.Types.ObjectId): Promise<this>;
@@ -111,6 +117,12 @@ const NoteSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    reactions: Date
   }
 }, {
   timestamps: true,

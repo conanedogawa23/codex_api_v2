@@ -14,6 +14,13 @@ export interface IWikiPage extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    content?: Date;
+    history?: Date;
+  };
 }
 
 const WikiPageSchema: Schema = new Schema({
@@ -66,6 +73,13 @@ const WikiPageSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    content: Date,
+    history: Date
   }
 }, {
   timestamps: true,

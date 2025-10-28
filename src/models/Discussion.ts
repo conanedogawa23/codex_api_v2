@@ -11,6 +11,12 @@ export interface IDiscussion extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    notes?: Date;
+  };
 }
 
 const DiscussionSchema: Schema = new Schema({
@@ -55,6 +61,12 @@ const DiscussionSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    notes: Date
   }
 }, {
   timestamps: true,

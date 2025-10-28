@@ -17,6 +17,14 @@ export interface IMilestone extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    issues?: Date;
+    mergeRequests?: Date;
+    statistics?: Date;
+  };
 }
 
 const MilestoneSchema: Schema = new Schema({
@@ -83,6 +91,14 @@ const MilestoneSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    issues: Date,
+    mergeRequests: Date,
+    statistics: Date
   }
 }, {
   timestamps: true,

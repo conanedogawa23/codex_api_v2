@@ -13,6 +13,11 @@ export interface IDraftNote extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+  };
 }
 
 const DraftNoteSchema: Schema = new Schema({
@@ -63,6 +68,11 @@ const DraftNoteSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date
   }
 }, {
   timestamps: true,

@@ -19,6 +19,13 @@ export interface ILabel extends Document {
   isDeleted: boolean;
   createdAt: Date;
   updatedAt: Date;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    usageStats?: Date;
+    relatedIssues?: Date;
+  };
 }
 
 const LabelSchema: Schema = new Schema({
@@ -100,6 +107,13 @@ const LabelSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    usageStats: Date,
+    relatedIssues: Date
   }
 }, {
   timestamps: true,

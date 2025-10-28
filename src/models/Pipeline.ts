@@ -22,6 +22,15 @@ export interface IPipeline extends Document {
   committedAt?: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    jobs?: Date;
+    testReports?: Date;
+    variables?: Date;
+    artifacts?: Date;
+  };
 }
 
 const PipelineSchema: Schema = new Schema({
@@ -109,6 +118,15 @@ const PipelineSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    jobs: Date,
+    testReports: Date,
+    variables: Date,
+    artifacts: Date
   }
 }, {
   timestamps: true,

@@ -24,6 +24,13 @@ export interface IPipelineJob extends Document {
   artifactsExpireAt?: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    artifacts?: Date;
+    logs?: Date;
+  };
 }
 
 const PipelineJobSchema: Schema = new Schema({
@@ -121,6 +128,13 @@ const PipelineJobSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    artifacts: Date,
+    logs: Date
   }
 }, {
   timestamps: { createdAt: true, updatedAt: false },

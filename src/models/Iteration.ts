@@ -15,6 +15,12 @@ export interface IIteration extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    issues?: Date;
+  };
 }
 
 const IterationSchema: Schema = new Schema({
@@ -74,6 +80,12 @@ const IterationSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    issues: Date
   }
 }, {
   timestamps: true,

@@ -8,6 +8,14 @@ import {
   resumeUserSyncScheduler,
   cleanupOldJobs,
 } from './schedulers/userSync.scheduler';
+import {
+  initializeProjectSyncScheduler,
+  triggerImmediateSync as triggerProjectImmediateSync,
+  getProjectSyncSchedulerStatus,
+  pauseProjectSyncScheduler,
+  resumeProjectSyncScheduler,
+  cleanupOldJobs as cleanupProjectOldJobs,
+} from './schedulers/projectSync.scheduler';
 
 /**
  * Job Manager
@@ -41,9 +49,12 @@ export class JobManager {
       // Initialize user sync scheduler
       await initializeUserSyncScheduler();
 
+      // Initialize project sync scheduler
+      await initializeProjectSyncScheduler();
+
       // Add more schedulers here as needed
-      // await initializeProjectSyncScheduler();
       // await initializeIssueSyncScheduler();
+      // await initializeMergeRequestSyncScheduler();
 
       this.isInitialized = true;
       logger.info('Job manager initialized successfully');
@@ -114,6 +125,41 @@ export class JobManager {
   public async cleanupJobs(gracePeriodHours: number = 24): Promise<void> {
     return cleanupOldJobs(gracePeriodHours);
   }
+
+  /**
+   * Trigger manual project sync
+   */
+  public async triggerProjectSync(): Promise<void> {
+    return triggerProjectImmediateSync();
+  }
+
+  /**
+   * Get project sync scheduler status
+   */
+  public async getProjectSyncStatus() {
+    return getProjectSyncSchedulerStatus();
+  }
+
+  /**
+   * Pause project sync scheduler
+   */
+  public async pauseProjectSync(): Promise<void> {
+    return pauseProjectSyncScheduler();
+  }
+
+  /**
+   * Resume project sync scheduler
+   */
+  public async resumeProjectSync(): Promise<void> {
+    return resumeProjectSyncScheduler();
+  }
+
+  /**
+   * Clean up old project sync jobs
+   */
+  public async cleanupProjectJobs(gracePeriodHours: number = 24): Promise<void> {
+    return cleanupProjectOldJobs(gracePeriodHours);
+  }
 }
 
 // Export singleton instance
@@ -126,4 +172,9 @@ export {
   pauseUserSyncScheduler,
   resumeUserSyncScheduler,
   cleanupOldJobs,
+  triggerProjectImmediateSync as triggerProjectSync,
+  getProjectSyncSchedulerStatus,
+  pauseProjectSyncScheduler,
+  resumeProjectSyncScheduler,
+  cleanupProjectOldJobs,
 };

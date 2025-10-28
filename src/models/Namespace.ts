@@ -21,6 +21,14 @@ export interface INamespace extends Document {
   updatedAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    projects?: Date;
+    groups?: Date;
+    statistics?: Date;
+  };
 }
 
 const NamespaceSchema: Schema = new Schema({
@@ -102,6 +110,14 @@ const NamespaceSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    projects: Date,
+    groups: Date,
+    statistics: Date
   }
 }, {
   timestamps: true,

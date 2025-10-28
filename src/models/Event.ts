@@ -21,6 +21,11 @@ export interface IEvent extends Document {
   note?: Record<string, unknown>;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+  };
 }
 
 const EventSchema: Schema = new Schema({
@@ -76,6 +81,11 @@ const EventSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date
   }
 }, {
   timestamps: { createdAt: true, updatedAt: false },

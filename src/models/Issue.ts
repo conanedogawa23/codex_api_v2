@@ -48,6 +48,16 @@ export interface IIssue extends Document {
   dueDate?: Date;
   lastSynced: Date;
   isActive: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+    assigneesAuthor?: Date;
+    labelsMilestones?: Date;
+    relatedMRs?: Date;
+    issueLinks?: Date;
+    timeTracking?: Date;
+  };
   
   // Instance methods
   updateSyncTimestamp(): Promise<IIssue>;
@@ -179,6 +189,16 @@ const IssueSchema: Schema = new Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date,
+    assigneesAuthor: Date,
+    labelsMilestones: Date,
+    relatedMRs: Date,
+    issueLinks: Date,
+    timeTracking: Date
   }
 }, {
   timestamps: true,

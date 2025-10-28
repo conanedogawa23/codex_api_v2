@@ -9,7 +9,6 @@ export const CORE_IDENTITY_QUERY = `
         id
         username
         name
-        email
         publicEmail
         avatarUrl
         webUrl
@@ -22,6 +21,12 @@ export const CORE_IDENTITY_QUERY = `
         human
         commitEmail
         groupCount
+        emails(first: 1) {
+          nodes {
+            email
+            confirmedAt
+          }
+        }
       }
       pageInfo {
         hasNextPage
@@ -946,11 +951,15 @@ export const SIMPLE_USERS_QUERY = `
         id
         username
         name
-        email
         state
         avatarUrl
         createdAt
         lastActivityOn
+        emails(first: 1) {
+          nodes {
+            email
+          }
+        }
       }
       pageInfo {
         hasNextPage
@@ -969,7 +978,6 @@ export const SINGLE_USER_QUERY = `
       id
       username
       name
-      email
       publicEmail
       avatarUrl
       webUrl
@@ -988,6 +996,13 @@ export const SINGLE_USER_QUERY = `
       lastActivityOn
       commitEmail
       groupCount
+      
+      emails(first: 1) {
+        nodes {
+          email
+          confirmedAt
+        }
+      }
       
       userPermissions {
         createSnippet
@@ -1018,7 +1033,6 @@ export const SYNC_USER_QUERY = `
       id
       username
       name
-      email
       publicEmail
       avatarUrl
       webUrl
@@ -1038,6 +1052,14 @@ export const SYNC_USER_QUERY = `
       lastActivityOn
       commitEmail
       groupCount
+      
+      # Emails connection (includes all email addresses)
+      emails(first: 5) {
+        nodes {
+          email
+          confirmedAt
+        }
+      }
       
       # Permissions
       userPermissions {

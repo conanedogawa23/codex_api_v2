@@ -28,6 +28,39 @@ export interface IUser extends Document {
   lastSynced: Date;
   isActive: boolean;
 
+  // User Source & Sync Control
+  userSource: 'gitlab' | 'manual';
+  externalId?: string;
+  canSyncFromGitlab: boolean;
+  manuallyCreatedBy?: {
+    userId: string;
+    username: string;
+    timestamp: Date;
+  };
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreIdentity?: Date;
+    profileSocial?: Date;
+    permissionsStatus?: Date;
+    namespace?: Date;
+    groupMemberships?: Date;
+    projectMemberships?: Date;
+    groups?: Date;
+    authoredMergeRequests?: Date;
+    assignedMergeRequests?: Date;
+    reviewRequestedMergeRequests?: Date;
+    starredProjects?: Date;
+    contributedProjects?: Date;
+    snippets?: Date;
+    savedReplies?: Date;
+    timelogs?: Date;
+    todos?: Date;
+    emails?: Date;
+    callouts?: Date;
+    namespaceCommitEmails?: Date;
+  };
+
   // Contact & Social Information
   skype?: string;
   linkedin?: string;
@@ -167,6 +200,53 @@ const UserSchema: Schema = new Schema({
     default: true
   },
 
+  // User Source & Sync Control
+  userSource: {
+    type: String,
+    enum: ['gitlab', 'manual'],
+    default: 'gitlab',
+    required: true,
+    index: true
+  },
+  externalId: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+  canSyncFromGitlab: {
+    type: Boolean,
+    default: true,
+    index: true
+  },
+  manuallyCreatedBy: {
+    userId: String,
+    username: String,
+    timestamp: Date
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreIdentity: Date,
+    profileSocial: Date,
+    permissionsStatus: Date,
+    namespace: Date,
+    groupMemberships: Date,
+    projectMemberships: Date,
+    groups: Date,
+    authoredMergeRequests: Date,
+    assignedMergeRequests: Date,
+    reviewRequestedMergeRequests: Date,
+    starredProjects: Date,
+    contributedProjects: Date,
+    snippets: Date,
+    savedReplies: Date,
+    timelogs: Date,
+    todos: Date,
+    emails: Date,
+    callouts: Date,
+    namespaceCommitEmails: Date
+  },
+
   // Contact & Social Information
   skype: String,
   linkedin: String,
@@ -229,6 +309,9 @@ UserSchema.index({ status: 1 });
 UserSchema.index({ 'projects.id': 1 });
 UserSchema.index({ skills: 1 });
 UserSchema.index({ lastSynced: 1 });
+UserSchema.index({ userSource: 1, email: 1 });
+UserSchema.index({ userSource: 1, status: 1 });
+UserSchema.index({ canSyncFromGitlab: 1 });
 
 // Virtual for full name
 UserSchema.virtual('fullName').get(function() {

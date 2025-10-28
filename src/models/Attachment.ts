@@ -13,6 +13,11 @@ export interface IAttachment extends Document {
   createdAt: Date;
   lastSyncedAt: Date;
   isDeleted: boolean;
+
+  // Category-level Sync Timestamps
+  syncTimestamps?: {
+    coreData?: Date;
+  };
 }
 
 const AttachmentSchema: Schema = new Schema({
@@ -65,6 +70,11 @@ const AttachmentSchema: Schema = new Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Category-level Sync Timestamps
+  syncTimestamps: {
+    coreData: Date
   }
 }, {
   timestamps: { createdAt: true, updatedAt: false },
