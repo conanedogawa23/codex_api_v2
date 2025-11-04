@@ -80,6 +80,7 @@ export const mergeRequestModule = createModule({
         offset: Int = 0
       ): [MergeRequest!]!
       mergeRequestsByProject(projectId: Int!, state: MergeRequestState, limit: Int = 20): [MergeRequest!]!
+      gitlabMergeRequests(projectId: String!, state: MergeRequestState, limit: Int = 20): [MergeRequest!]!
     }
 
     extend type Mutation {
@@ -134,6 +135,21 @@ export const mergeRequestModule = createModule({
         { projectId, state, limit = 20 }: { projectId: number; state?: string; limit: number }
       ) => {
         const filter: any = { projectId };
+        if (state) filter.state = state;
+
+        return await MergeRequest.find(filter)
+          .limit(limit)
+          .sort({ updatedAt: -1 })
+          .lean();
+      },
+
+      gitlabMergeRequests: async (
+        _: any,
+        { projectId, state, limit = 20 }: { projectId: string; state?: string; limit: number }
+      ) => {
+        // Convert projectId string to number for MongoDB query
+        const projectIdNum = parseInt(projectId, 10);
+        const filter: any = { projectId: projectIdNum };
         if (state) filter.state = state;
 
         return await MergeRequest.find(filter)

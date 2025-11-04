@@ -96,6 +96,7 @@ export const issueModule = createModule({
       ): [Issue!]!
       myGitlabIssues(limit: Int = 20): [Issue!]!
       issuesByProject(projectId: Int!, state: IssueState, limit: Int = 20): [Issue!]!
+      gitlabIssues(projectId: String!, state: IssueState, limit: Int = 20): [Issue!]!
       overdueIssues(limit: Int = 20): [Issue!]!
     }
 
@@ -167,6 +168,22 @@ export const issueModule = createModule({
         { projectId, state, limit = 20 }: { projectId: number; state?: string; limit: number }
       ) => {
         const filter: any = { projectId };
+        // Convert GraphQL enum to DB format
+        if (state) filter.state = state.toLowerCase();
+
+        return await Issue.find(filter)
+          .limit(limit)
+          .sort({ updatedAt: -1 })
+          .lean();
+      },
+
+      gitlabIssues: async (
+        _: any,
+        { projectId, state, limit = 20 }: { projectId: string; state?: string; limit: number }
+      ) => {
+        // Convert projectId string to number for MongoDB query
+        const projectIdNum = parseInt(projectId, 10);
+        const filter: any = { projectId: projectIdNum };
         // Convert GraphQL enum to DB format
         if (state) filter.state = state.toLowerCase();
 

@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { Project } from '../../../models/Project';
+import { Namespace } from '../../../models/Namespace';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 
@@ -40,6 +41,9 @@ export const projectModule = createModule({
       name: String!
       path: String!
       kind: String!
+      fullPath: String
+      membersCountWithDescendants: Int
+      billableMembersCount: Int
     }
 
     type ProjectAssignee {
@@ -57,9 +61,41 @@ export const projectModule = createModule({
     }
 
     type ProjectBudget {
-      allocated: Float!
-      spent: Float!
-      currency: String!
+      allocated: Float
+      spent: Float
+      currency: String
+    }
+
+    """
+    ProjectDetails is an alias for Project for backward compatibility
+    """
+    type ProjectDetails {
+      id: ID!
+      gitlabId: Int!
+      name: String!
+      nameWithNamespace: String!
+      description: String
+      defaultBranch: String!
+      visibility: ProjectVisibility!
+      webUrl: String!
+      httpUrlToRepo: String!
+      sshUrlToRepo: String!
+      pathWithNamespace: String!
+      namespace: ProjectNamespace!
+      status: ProjectStatus!
+      progress: Int!
+      priority: ProjectPriority!
+      category: String!
+      department: String
+      deadline: DateTime
+      assignedTo: [ProjectAssignee!]!
+      tasks: ProjectTasks!
+      budget: ProjectBudget
+      createdAt: DateTime!
+      updatedAt: DateTime!
+      lastActivityAt: DateTime!
+      lastSynced: DateTime!
+      isActive: Boolean!
     }
 
     enum ProjectVisibility {
@@ -117,6 +153,7 @@ export const projectModule = createModule({
 
     extend type Query {
       project(id: ID!): Project
+      projectDetails(projectId: ID!): ProjectDetails
       projectByGitlabId(gitlabId: Int!): Project
       projects(
         status: ProjectStatus
@@ -172,17 +209,134 @@ export const projectModule = createModule({
       progress: (parent: any) => parent.progress || 0,
       assignedTo: (parent: any) => parent.assignedTo || [],
       tasks: (parent: any) => parent.tasks || { total: 0, completed: 0, inProgress: 0, pending: 0 },
-      namespace: (parent: any) => parent.namespace || {
-        id: 0,
-        name: 'Unknown',
-        path: 'unknown',
-        kind: 'group'
+      budget: (parent: any) => {
+        // Return null if budget doesn't exist
+        if (!parent.budget) return null;
+        // Return the budget object as-is, allowing null fields
+        return parent.budget;
+      },
+      namespace: async (parent: any) => {
+        // If no namespace, return default
+        if (!parent.namespace?.id) {
+          return {
+            id: 0,
+            name: 'Unknown',
+            path: 'unknown',
+            kind: 'group',
+            fullPath: 'unknown',
+            membersCountWithDescendants: 0,
+            billableMembersCount: 0
+          };
+        }
+        
+        // Fetch full namespace data from Namespace collection
+        const namespace = await Namespace.findOne({ gitlabId: parent.namespace.id }).lean();
+        
+        // If namespace found, return it with member counts
+        if (namespace) {
+          return {
+            id: namespace.gitlabId,
+            name: namespace.name,
+            path: namespace.path,
+            kind: namespace.kind,
+            fullPath: namespace.fullPath,
+            membersCountWithDescendants: namespace.membersCountWithDescendants || 0,
+            billableMembersCount: namespace.billableMembersCount || 0
+          };
+        }
+        
+        // Fallback to embedded namespace if not found in collection
+        return {
+          ...parent.namespace,
+          fullPath: parent.namespace.path,
+          membersCountWithDescendants: 0,
+          billableMembersCount: 0
+        };
+      },
+    },
+    
+    // ProjectDetails resolver (alias for Project)
+    ProjectDetails: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+      nameWithNamespace: (parent: any) => parent.nameWithNamespace || parent.name || 'Unknown Project',
+      defaultBranch: (parent: any) => parent.defaultBranch || 'main',
+      webUrl: (parent: any) => parent.webUrl || '',
+      httpUrlToRepo: (parent: any) => parent.httpUrlToRepo || '',
+      sshUrlToRepo: (parent: any) => parent.sshUrlToRepo || '',
+      pathWithNamespace: (parent: any) => parent.pathWithNamespace || parent.name || '',
+      category: (parent: any) => parent.category || 'Uncategorized',
+      status: (parent: any) => {
+        const status = parent.status || 'planned';
+        return status.replace(/-/g, '_').toUpperCase();
+      },
+      priority: (parent: any) => {
+        const priority = parent.priority || 'medium';
+        return priority.toUpperCase();
+      },
+      visibility: (parent: any) => {
+        const visibility = parent.visibility || 'private';
+        return visibility.toUpperCase();
+      },
+      progress: (parent: any) => parent.progress || 0,
+      assignedTo: (parent: any) => parent.assignedTo || [],
+      tasks: (parent: any) => parent.tasks || { total: 0, completed: 0, inProgress: 0, pending: 0 },
+      budget: (parent: any) => {
+        // Return null if budget doesn't exist
+        if (!parent.budget) return null;
+        // Return the budget object as-is, allowing null fields
+        return parent.budget;
+      },
+      namespace: async (parent: any) => {
+        // If no namespace, return default
+        if (!parent.namespace?.id) {
+          return {
+            id: 0,
+            name: 'Unknown',
+            path: 'unknown',
+            kind: 'group',
+            fullPath: 'unknown',
+            membersCountWithDescendants: 0,
+            billableMembersCount: 0
+          };
+        }
+        
+        // Fetch full namespace data from Namespace collection
+        const namespace = await Namespace.findOne({ gitlabId: parent.namespace.id }).lean();
+        
+        // If namespace found, return it with member counts
+        if (namespace) {
+          return {
+            id: namespace.gitlabId,
+            name: namespace.name,
+            path: namespace.path,
+            kind: namespace.kind,
+            fullPath: namespace.fullPath,
+            membersCountWithDescendants: namespace.membersCountWithDescendants || 0,
+            billableMembersCount: namespace.billableMembersCount || 0
+          };
+        }
+        
+        // Fallback to embedded namespace if not found in collection
+        return {
+          ...parent.namespace,
+          fullPath: parent.namespace.path,
+          membersCountWithDescendants: 0,
+          billableMembersCount: 0
+        };
       },
     },
     
     Query: {
       project: async (_: any, { id }: { id: string }) => {
         const project = await Project.findById(id).lean();
+        if (!project) {
+          throw new AppError('Project not found', 404);
+        }
+        return project;
+      },
+
+      projectDetails: async (_: any, { projectId }: { projectId: string }) => {
+        const project = await Project.findById(projectId).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }

@@ -12,8 +12,15 @@ export const taskModule = createModule({
       email: String!
     }
 
+    type TaskAttachment {
+      name: String!
+      url: String!
+      type: String!
+    }
+
     type Task {
       id: ID!
+      gitlabIssueId: Int
       title: String!
       description: String
       status: TaskStatus!
@@ -21,11 +28,49 @@ export const taskModule = createModule({
       projectId: String
       issueId: String
       assignedTo: TaskAssignee
+      assignedBy: TaskAssignee
       dueDate: DateTime
       estimatedHours: Float
       actualHours: Float
       completionPercentage: Int!
       tags: [String!]!
+      comments: Int!
+      dependencies: [String!]!
+      subtasks: [String!]!
+      attachments: [TaskAttachment!]!
+      isOverdue: Boolean!
+      daysUntilDue: Int
+      createdAt: DateTime!
+      updatedAt: DateTime!
+      completedAt: DateTime
+      isActive: Boolean!
+    }
+    
+    """
+    TaskDetails is an alias for Task for backward compatibility
+    """
+    type TaskDetails {
+      id: ID!
+      gitlabIssueId: Int
+      title: String!
+      description: String
+      status: TaskStatus!
+      priority: TaskPriority!
+      projectId: String
+      issueId: String
+      assignedTo: TaskAssignee
+      assignedBy: TaskAssignee
+      dueDate: DateTime
+      estimatedHours: Float
+      actualHours: Float
+      completionPercentage: Int!
+      tags: [String!]!
+      comments: Int!
+      dependencies: [String!]!
+      subtasks: [String!]!
+      attachments: [TaskAttachment!]!
+      isOverdue: Boolean!
+      daysUntilDue: Int
       createdAt: DateTime!
       updatedAt: DateTime!
       completedAt: DateTime
@@ -105,7 +150,7 @@ export const taskModule = createModule({
         offset: Int = 0
       ): [Task!]!
       tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
-      tasksByProject(projectId: String!, status: TaskStatus, limit: Int = 20): [Task!]!
+      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20): [TaskDetails!]!
       tasksByIssue(issueId: String!): [Task!]!
     }
 
@@ -131,6 +176,51 @@ export const taskModule = createModule({
       },
       completionPercentage: (parent: any) => parent.completionPercentage || 0,
       tags: (parent: any) => parent.tags || [],
+      comments: (parent: any) => parent.comments || 0,
+      dependencies: (parent: any) => parent.dependencies || [],
+      subtasks: (parent: any) => parent.subtasks || [],
+      attachments: (parent: any) => parent.attachments || [],
+      isOverdue: (parent: any) => {
+        // Calculate if task is overdue
+        if (!parent.dueDate) return false;
+        const status = parent.status?.toLowerCase().replace(/_/g, '-');
+        return parent.dueDate < new Date() && status !== 'completed';
+      },
+      daysUntilDue: (parent: any) => {
+        // Calculate days until due date
+        if (!parent.dueDate) return null;
+        const now = new Date();
+        const diffTime = new Date(parent.dueDate).getTime() - now.getTime();
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      },
+    },
+    
+    // TaskDetails resolver (alias for Task)
+    TaskDetails: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+      status: (parent: any) => {
+        return parent.status?.replace(/-/g, '_').toUpperCase();
+      },
+      priority: (parent: any) => {
+        return parent.priority?.toUpperCase();
+      },
+      completionPercentage: (parent: any) => parent.completionPercentage || 0,
+      tags: (parent: any) => parent.tags || [],
+      comments: (parent: any) => parent.comments || 0,
+      dependencies: (parent: any) => parent.dependencies || [],
+      subtasks: (parent: any) => parent.subtasks || [],
+      attachments: (parent: any) => parent.attachments || [],
+      isOverdue: (parent: any) => {
+        if (!parent.dueDate) return false;
+        const status = parent.status?.toLowerCase().replace(/_/g, '-');
+        return parent.dueDate < new Date() && status !== 'completed';
+      },
+      daysUntilDue: (parent: any) => {
+        if (!parent.dueDate) return null;
+        const now = new Date();
+        const diffTime = new Date(parent.dueDate).getTime() - now.getTime();
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      },
     },
     
     Query: {
