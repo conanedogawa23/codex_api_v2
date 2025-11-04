@@ -18,7 +18,7 @@ class DiscussionSyncProcessor extends BaseSyncProcessor<IDiscussion> {
   }
 
   async getExisting(gitlabId: number): Promise<any> {
-    return await Discussion.findOne({ gitlabId }).lean();
+    return await Discussion.findOne({ gitlabId: String(gitlabId) }).lean();
   }
 
   mapToModel(gitlabData: any): Partial<IDiscussion> {
@@ -27,10 +27,15 @@ class DiscussionSyncProcessor extends BaseSyncProcessor<IDiscussion> {
 
     const discussion = gitlabData.discussions[0];
     return {
-      gitlabId: this.extractGitLabId(discussion),
+      gitlabId: String(this.extractGitLabId(discussion)),
+      projectId: discussion.project?.id ? String(this.extractGitLabId(discussion.project)) : '',
+      noteableType: discussion.noteableType || 'Issue',
+      individualNote: discussion.individualNote || false,
       resolved: discussion.resolved || false,
       resolvable: discussion.resolvable || false,
+      noteIds: [],
       createdAt: discussion.createdAt ? new Date(discussion.createdAt) : syncTime,
+      updatedAt: discussion.updatedAt ? new Date(discussion.updatedAt) : syncTime,
       resolvedAt: discussion.resolvedAt ? new Date(discussion.resolvedAt) : undefined,
       lastSyncedAt: syncTime,
       isDeleted: false,

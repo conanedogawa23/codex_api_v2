@@ -3,6 +3,7 @@ import { createApplication } from 'graphql-modules';
 import { scalarsModule } from './modules/common/scalars.module';
 import { baseModule } from './modules/common/base.module';
 import { healthModule } from './modules/health/health.module';
+import { authModule } from './modules/auth/auth.module';
 import { userModule } from './modules/user/user.module';
 import { projectModule } from './modules/project/project.module';
 import { issueModule } from './modules/issue/issue.module';
@@ -28,6 +29,7 @@ export const application = createApplication({
     scalarsModule,
     baseModule,
     healthModule,
+    authModule,
     userModule,
     projectModule,
     issueModule,

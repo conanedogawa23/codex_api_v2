@@ -57,20 +57,20 @@ export const issueModule = createModule({
     }
 
     enum IssueState {
-      opened
-      closed
+      OPENED
+      CLOSED
     }
 
     enum IssuePriority {
-      low
-      medium
-      high
-      urgent
+      LOW
+      MEDIUM
+      HIGH
+      URGENT
     }
 
     enum MilestoneState {
-      active
-      closed
+      ACTIVE
+      CLOSED
     }
 
     input UpdateIssueInput {
@@ -94,6 +94,7 @@ export const issueModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Issue!]!
+      myGitlabIssues(limit: Int = 20): [Issue!]!
       issuesByProject(projectId: Int!, state: IssueState, limit: Int = 20): [Issue!]!
       overdueIssues(limit: Int = 20): [Issue!]!
     }
@@ -110,6 +111,19 @@ export const issueModule = createModule({
   resolvers: {
     Issue: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      state: (parent: any) => {
+        // Convert DB format (lowercase) to GraphQL format (uppercase)
+        return parent.state?.toUpperCase();
+      },
+      priority: (parent: any) => {
+        return parent.priority?.toUpperCase();
+      },
+    },
+    
+    IssueMilestone: {
+      state: (parent: any) => {
+        return parent.state?.toUpperCase();
+      },
     },
     
     Query: {
@@ -135,8 +149,9 @@ export const issueModule = createModule({
       ) => {
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
-        if (state) filter.state = state;
-        if (priority) filter.priority = priority;
+        // Convert GraphQL enums to DB format
+        if (state) filter.state = state.toLowerCase();
+        if (priority) filter.priority = priority.toLowerCase();
         if (assigneeId) filter['assignees.id'] = assigneeId;
         if (labels && labels.length > 0) filter.labels = { $in: labels };
 
@@ -152,12 +167,40 @@ export const issueModule = createModule({
         { projectId, state, limit = 20 }: { projectId: number; state?: string; limit: number }
       ) => {
         const filter: any = { projectId };
-        if (state) filter.state = state;
+        // Convert GraphQL enum to DB format
+        if (state) filter.state = state.toLowerCase();
 
         return await Issue.find(filter)
           .limit(limit)
           .sort({ updatedAt: -1 })
           .lean();
+      },
+
+      myGitlabIssues: async (_: any, { limit = 20 }: { limit: number }, context: any) => {
+        // Get current user from context (JWT token)
+        const authHeader = context.req?.headers?.authorization;
+        
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+          // If not authenticated, act as admin and return all issues
+          logger.info('myGitlabIssues called without authentication - returning all issues (admin mode)');
+          const issues = await Issue.find({ state: 'opened' })
+            .limit(limit)
+            .sort({ updatedAt: -1 })
+            .lean();
+          
+          logger.info('Fetched all GitLab issues (admin mode)', { count: issues.length });
+          return issues;
+        }
+
+        // If authenticated, return issues for that user (can be refined with proper user context)
+        // For now, return all opened issues
+        const issues = await Issue.find({ state: 'opened' })
+          .limit(limit)
+          .sort({ updatedAt: -1 })
+          .lean();
+
+        logger.info('Fetched myGitlabIssues', { count: issues.length });
+        return issues;
       },
 
       overdueIssues: async (_: any, { limit = 20 }: { limit: number }) => {
@@ -168,7 +211,12 @@ export const issueModule = createModule({
 
     Mutation: {
       updateIssue: async (_: any, { id, input }: any) => {
-        const issue = await Issue.findByIdAndUpdate(id, input, {
+        // Convert GraphQL enums to DB format
+        const dbInput = { ...input };
+        if (dbInput.state) dbInput.state = dbInput.state.toLowerCase();
+        if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        
+        const issue = await Issue.findByIdAndUpdate(id, dbInput, {
           new: true,
           runValidators: true,
         });

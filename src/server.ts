@@ -243,7 +243,7 @@ class Server {
       this.setupRoutes();
 
       // Initialize background jobs
-      await this.initializeJobs();
+      // await this.initializeJobs();
 
       // Start listening
       const server = this.app.listen(config.port, () => {

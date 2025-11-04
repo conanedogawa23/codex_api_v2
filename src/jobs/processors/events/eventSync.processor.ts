@@ -28,7 +28,11 @@ class EventSyncProcessor extends BaseSyncProcessor<IEvent> {
     const event = gitlabData.events[0];
     return {
       gitlabId: this.extractGitLabId(event),
-      action: event.action || '',
+      projectId: event.project?.id ? String(this.extractGitLabId(event.project)) : undefined,
+      actionName: event.actionName || event.action || '',
+      targetType: event.targetType || undefined,
+      targetId: event.targetId || undefined,
+      targetTitle: event.targetTitle || undefined,
       createdAt: event.createdAt ? new Date(event.createdAt) : syncTime,
       lastSyncedAt: syncTime,
       isDeleted: false,

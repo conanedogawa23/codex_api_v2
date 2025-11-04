@@ -28,10 +28,13 @@ class WikiPageSyncProcessor extends BaseSyncProcessor<IWikiPage> {
     const page = gitlabData.wikiPages[0];
     return {
       gitlabId: this.extractGitLabId(page),
-      title: page.title || '',
       slug: page.slug || '',
-      format: page.format || 'markdown',
+      projectId: page.project?.id ? String(this.extractGitLabId(page.project)) : '',
+      title: page.title || '',
       content: page.content || '',
+      format: page.format || 'markdown',
+      encoding: page.encoding || 'UTF-8',
+      webUrl: page.webUrl || undefined,
       createdAt: page.createdAt ? new Date(page.createdAt) : syncTime,
       updatedAt: page.updatedAt ? new Date(page.updatedAt) : syncTime,
       lastSyncedAt: syncTime,

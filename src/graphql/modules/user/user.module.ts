@@ -25,10 +25,33 @@ export const userModule = createModule({
       updatedAt: DateTime!
     }
 
+    """
+    OrganizationUser is an alias for User type for frontend compatibility
+    """
+    type OrganizationUser {
+      id: ID!
+      gitlabId: Int
+      name: String!
+      email: String!
+      username: String!
+      role: String!
+      department: String!
+      avatar: String
+      joinDate: DateTime!
+      status: UserStatus!
+      skills: [String!]!
+      assignedRepos: [String!]!
+      projects: [UserProject!]!
+      lastSynced: DateTime!
+      isActive: Boolean!
+      createdAt: DateTime!
+      updatedAt: DateTime!
+    }
+
     enum UserStatus {
-      active
-      inactive
-      on_leave
+      ACTIVE
+      INACTIVE
+      ON_LEAVE
     }
 
     type UserProject {
@@ -52,6 +75,7 @@ export const userModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [User!]!
+      organizationUsers: [OrganizationUser!]!
       userByEmail(email: String!): User
       userByGitlabId(gitlabId: Int!): User
     }
@@ -65,6 +89,22 @@ export const userModule = createModule({
   resolvers: {
     User: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      status: (parent: any) => {
+        // Convert DB format (lowercase with hyphen) to GraphQL format (uppercase with underscore)
+        // DB: 'on-leave' -> GraphQL: 'ON_LEAVE'
+        return parent.status?.replace(/-/g, '_').toUpperCase();
+      },
+      createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
+      updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
+    },
+    
+    OrganizationUser: {
+      id: (parent: any) => parent._id?.toString() || parent.id,
+      status: (parent: any) => {
+        return parent.status?.replace(/-/g, '_').toUpperCase();
+      },
+      createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
+      updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
     },
     
     Query: {
@@ -77,7 +117,8 @@ export const userModule = createModule({
       },
       users: async (_: any, { status, department, limit = 20, offset = 0 }: any) => {
         const filter: any = {};
-        if (status) filter.status = status;
+        // Convert GraphQL enum to DB format
+        if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (department) filter.department = department;
         return await User.find(filter).limit(limit).skip(offset).sort({ createdAt: -1 }).lean();
       },
@@ -87,6 +128,9 @@ export const userModule = createModule({
           throw new AppError('User not found', 404);
         }
         return user;
+      },
+      organizationUsers: async () => {
+        return await User.find({ isActive: true }).sort({ name: 1 }).lean();
       },
       userByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
         const user = await User.findByGitlabId(gitlabId);
@@ -98,7 +142,11 @@ export const userModule = createModule({
     },
     Mutation: {
       updateUser: async (_: any, { id, input }: any) => {
-        const user = await User.findByIdAndUpdate(id, input, { new: true, runValidators: true });
+        // Convert GraphQL enum to DB format
+        const dbInput = { ...input };
+        if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
+        
+        const user = await User.findByIdAndUpdate(id, dbInput, { new: true, runValidators: true });
         if (!user) {
           throw new AppError('User not found', 404);
         }

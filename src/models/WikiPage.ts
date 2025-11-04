@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IWikiPage extends Document {
+  gitlabId: number;
   slug: string;
   projectId: string;
   title: string;
@@ -24,6 +25,12 @@ export interface IWikiPage extends Document {
 }
 
 const WikiPageSchema: Schema = new Schema({
+  gitlabId: {
+    type: Number,
+    required: true,
+    unique: true,
+    index: true
+  },
   slug: {
     type: String,
     required: true,

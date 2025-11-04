@@ -6,6 +6,12 @@ import { logger } from '../../../utils/logger';
 export const taskModule = createModule({
   id: 'task',
   typeDefs: gql`
+    type TaskAssignee {
+      id: String!
+      name: String!
+      email: String!
+    }
+
     type Task {
       id: ID!
       title: String!
@@ -14,10 +20,12 @@ export const taskModule = createModule({
       priority: TaskPriority!
       projectId: String
       issueId: String
-      assignedTo: String
+      assignedTo: TaskAssignee
       dueDate: DateTime
       estimatedHours: Float
       actualHours: Float
+      completionPercentage: Int!
+      tags: [String!]!
       createdAt: DateTime!
       updatedAt: DateTime!
       completedAt: DateTime
@@ -25,18 +33,41 @@ export const taskModule = createModule({
     }
 
     enum TaskStatus {
-      pending
-      in_progress
-      completed
-      blocked
-      cancelled
+      PENDING
+      IN_PROGRESS
+      COMPLETED
+      DELAYED
+      CANCELLED
     }
 
     enum TaskPriority {
-      low
-      medium
-      high
-      urgent
+      LOW
+      MEDIUM
+      HIGH
+      URGENT
+    }
+
+    type TaskSummary {
+      total: Int!
+      completed: Int!
+      inProgress: Int!
+      pending: Int!
+    }
+
+    type TaskFilterResult {
+      tasks: [Task!]!
+      totalCount: Int!
+      statusSummary: TaskSummary!
+    }
+
+    input TaskFilterInput {
+      projectId: String
+      issueId: String
+      status: TaskStatus
+      priority: TaskPriority
+      assignedTo: String
+      dueDateFrom: DateTime
+      dueDateTo: DateTime
     }
 
     input CreateTaskInput {
@@ -73,6 +104,7 @@ export const taskModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Task!]!
+      tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
       tasksByProject(projectId: String!, status: TaskStatus, limit: Int = 20): [Task!]!
       tasksByIssue(issueId: String!): [Task!]!
     }
@@ -87,6 +119,18 @@ export const taskModule = createModule({
   resolvers: {
     Task: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      status: (parent: any) => {
+        // Map database hyphenated lowercase values to GraphQL uppercase underscore values
+        // DB: 'in-progress' -> GraphQL: 'IN_PROGRESS'
+        return parent.status?.replace(/-/g, '_').toUpperCase();
+      },
+      priority: (parent: any) => {
+        // Map database lowercase values to GraphQL uppercase values
+        // DB: 'high' -> GraphQL: 'HIGH'
+        return parent.priority?.toUpperCase();
+      },
+      completionPercentage: (parent: any) => parent.completionPercentage || 0,
+      tags: (parent: any) => parent.tags || [],
     },
     
     Query: {
@@ -105,8 +149,9 @@ export const taskModule = createModule({
         const filter: any = { isActive: true };
         if (projectId) filter.projectId = projectId;
         if (issueId) filter.issueId = issueId;
-        if (status) filter.status = status;
-        if (priority) filter.priority = priority;
+        // Convert GraphQL enum (uppercase underscore) to DB format (lowercase hyphen)
+        if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
+        if (priority) filter.priority = priority.toLowerCase();
         if (assignedTo) filter['assignedTo.id'] = assignedTo;
 
         return await Task.find(filter)
@@ -121,7 +166,8 @@ export const taskModule = createModule({
         { projectId, status, limit = 20 }: { projectId: string; status?: string; limit: number }
       ) => {
         const filter: any = { projectId, isActive: true };
-        if (status) filter.status = status;
+        // Convert GraphQL enum to DB format
+        if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
 
         return await Task.find(filter)
           .limit(limit)
@@ -132,18 +178,74 @@ export const taskModule = createModule({
       tasksByIssue: async (_: any, { issueId }: { issueId: string }) => {
         return await Task.find({ issueId, isActive: true }).sort({ priority: -1, dueDate: 1 }).lean();
       },
+
+      tasksByFilter: async (
+        _: any,
+        { filter, limit = 20, offset = 0 }: { filter: any; limit: number; offset: number }
+      ) => {
+        const query: any = { isActive: true };
+
+        // Apply filters (convert GraphQL uppercase format to DB lowercase hyphen format)
+        if (filter.projectId) query.projectId = filter.projectId;
+        if (filter.issueId) query.issueId = filter.issueId;
+        if (filter.status) query.status = filter.status.toLowerCase().replace(/_/g, '-');
+        if (filter.priority) query.priority = filter.priority.toLowerCase();
+        if (filter.assignedTo) query['assignedTo.id'] = filter.assignedTo;
+        
+        // Date range filters
+        if (filter.dueDateFrom || filter.dueDateTo) {
+          query.dueDate = {};
+          if (filter.dueDateFrom) query.dueDate.$gte = new Date(filter.dueDateFrom);
+          if (filter.dueDateTo) query.dueDate.$lte = new Date(filter.dueDateTo);
+        }
+
+        // Get tasks with pagination
+        const tasks = await Task.find(query)
+          .limit(limit)
+          .skip(offset)
+          .sort({ priority: -1, dueDate: 1 })
+          .lean();
+
+        // Get total count
+        const totalCount = await Task.countDocuments(query);
+
+        // Calculate status summary
+        const allTasks = await Task.find(query).select('status').lean();
+        const statusSummary = {
+          total: allTasks.length,
+          completed: allTasks.filter((t: any) => t.status === 'completed').length,
+          inProgress: allTasks.filter((t: any) => t.status === 'in-progress').length,
+          pending: allTasks.filter((t: any) => t.status === 'pending').length,
+        };
+
+        return {
+          tasks,
+          totalCount,
+          statusSummary,
+        };
+      },
     },
 
     Mutation: {
       createTask: async (_: any, { input }: any) => {
-        const task = new Task(input);
+        // Convert GraphQL enum values to DB format
+        const dbInput = { ...input };
+        if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
+        if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        
+        const task = new Task(dbInput);
         await task.save();
         logger.info(`Created task: ${task.title}`);
         return task;
       },
 
       updateTask: async (_: any, { id, input }: any) => {
-        const task = await Task.findByIdAndUpdate(id, input, {
+        // Convert GraphQL enum values to DB format
+        const dbInput = { ...input };
+        if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
+        if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        
+        const task = await Task.findByIdAndUpdate(id, dbInput, {
           new: true,
           runValidators: true,
         });

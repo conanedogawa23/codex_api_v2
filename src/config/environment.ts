@@ -12,6 +12,8 @@ export interface EnvironmentConfig {
   graphqlIntrospection: boolean;
   graphqlUrl: string;
   logLevel: string;
+  jwtSecret: string;
+  jwtExpiresIn: string;
   redis: {
     host: string;
     port: number;
@@ -41,6 +43,8 @@ class Environment {
       graphqlIntrospection: process.env.GRAPHQL_INTROSPECTION === 'true',
       graphqlUrl: process.env.GRAPHQL_URL || `http://localhost:${process.env.PORT || '4000'}/graphql`,
       logLevel: process.env.LOG_LEVEL || 'info',
+      jwtSecret: process.env.JWT_SECRET || 'default-secret-change-in-production',
+      jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
       redis: {
         host: process.env.REDIS_HOST || '127.0.0.1',
         port: parseInt(process.env.REDIS_PORT || '6379', 10),
@@ -77,6 +81,14 @@ class Environment {
 
   public get(): EnvironmentConfig {
     return this.config;
+  }
+
+  public get JWT_SECRET(): string {
+    return this.config.jwtSecret;
+  }
+
+  public get JWT_EXPIRES_IN(): string {
+    return this.config.jwtExpiresIn;
   }
 
   public isDevelopment(): boolean {

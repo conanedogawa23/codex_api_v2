@@ -6,6 +6,9 @@ export interface IDiscussion extends Document {
   noteableType: 'Issue' | 'MergeRequest';
   noteableId: mongoose.Types.ObjectId;
   individualNote: boolean;
+  resolved?: boolean;
+  resolvable?: boolean;
+  resolvedAt?: Date;
   noteIds: mongoose.Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
@@ -47,6 +50,17 @@ const DiscussionSchema: Schema = new Schema({
   individualNote: {
     type: Boolean,
     default: false
+  },
+  resolved: {
+    type: Boolean,
+    default: false
+  },
+  resolvable: {
+    type: Boolean,
+    default: false
+  },
+  resolvedAt: {
+    type: Date
   },
   noteIds: [{
     type: Schema.Types.ObjectId,

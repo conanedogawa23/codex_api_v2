@@ -60,7 +60,7 @@ router.post('/trigger/:entityType', async (req: Request, res: Response) => {
         });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: `${entityType} sync triggered successfully`
     });
@@ -69,7 +69,7 @@ router.post('/trigger/:entityType', async (req: Request, res: Response) => {
       entityType: req.params.entityType,
       error: error instanceof Error ? error.message : 'Unknown error'
     });
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to trigger sync'
     });
@@ -123,7 +123,7 @@ router.post('/pause/:entityType', async (req: Request, res: Response) => {
         });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: `${entityType} sync paused successfully`
     });
@@ -132,7 +132,7 @@ router.post('/pause/:entityType', async (req: Request, res: Response) => {
       entityType: req.params.entityType,
       error: error instanceof Error ? error.message : 'Unknown error'
     });
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to pause sync'
     });
@@ -161,7 +161,7 @@ router.post('/resume/:entityType', async (req: Request, res: Response) => {
         });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: `${entityType} sync resumed successfully`
     });
@@ -170,7 +170,7 @@ router.post('/resume/:entityType', async (req: Request, res: Response) => {
       entityType: req.params.entityType,
       error: error instanceof Error ? error.message : 'Unknown error'
     });
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to resume sync'
     });

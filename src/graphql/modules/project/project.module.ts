@@ -63,24 +63,24 @@ export const projectModule = createModule({
     }
 
     enum ProjectVisibility {
-      private
-      internal
-      public
+      PRIVATE
+      INTERNAL
+      PUBLIC
     }
 
     enum ProjectStatus {
-      planned
-      active
-      completed
-      on_hold
-      cancelled
+      PLANNED
+      ACTIVE
+      COMPLETED
+      ON_HOLD
+      CANCELLED
     }
 
     enum ProjectPriority {
-      low
-      medium
-      high
-      urgent
+      LOW
+      MEDIUM
+      HIGH
+      URGENT
     }
 
     input CreateProjectInput {
@@ -147,6 +147,37 @@ export const projectModule = createModule({
   resolvers: {
     Project: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      nameWithNamespace: (parent: any) => parent.nameWithNamespace || parent.name || 'Unknown Project',
+      defaultBranch: (parent: any) => parent.defaultBranch || 'main',
+      webUrl: (parent: any) => parent.webUrl || '',
+      httpUrlToRepo: (parent: any) => parent.httpUrlToRepo || '',
+      sshUrlToRepo: (parent: any) => parent.sshUrlToRepo || '',
+      pathWithNamespace: (parent: any) => parent.pathWithNamespace || parent.name || '',
+      category: (parent: any) => parent.category || 'Uncategorized',
+      status: (parent: any) => {
+        // Convert DB format (lowercase with hyphen) to GraphQL format (uppercase with underscore)
+        // DB: 'on-hold' -> GraphQL: 'ON_HOLD'
+        const status = parent.status || 'planned';
+        return status.replace(/-/g, '_').toUpperCase();
+      },
+      priority: (parent: any) => {
+        // Convert DB format (lowercase) to GraphQL format (uppercase)
+        const priority = parent.priority || 'medium';
+        return priority.toUpperCase();
+      },
+      visibility: (parent: any) => {
+        const visibility = parent.visibility || 'private';
+        return visibility.toUpperCase();
+      },
+      progress: (parent: any) => parent.progress || 0,
+      assignedTo: (parent: any) => parent.assignedTo || [],
+      tasks: (parent: any) => parent.tasks || { total: 0, completed: 0, inProgress: 0, pending: 0 },
+      namespace: (parent: any) => parent.namespace || {
+        id: 0,
+        name: 'Unknown',
+        path: 'unknown',
+        kind: 'group'
+      },
     },
     
     Query: {
@@ -171,8 +202,9 @@ export const projectModule = createModule({
         { status, priority, department, category, limit = 20, offset = 0 }: any
       ) => {
         const filter: any = { isActive: true };
-        if (status) filter.status = status;
-        if (priority) filter.priority = priority;
+        // Convert GraphQL enums to DB format
+        if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
+        if (priority) filter.priority = priority.toLowerCase();
         if (department) filter.department = department;
         if (category) filter.category = category;
 
@@ -199,7 +231,13 @@ export const projectModule = createModule({
 
     Mutation: {
       updateProject: async (_: any, { id, input }: any) => {
-        const project = await Project.findByIdAndUpdate(id, input, {
+        // Convert GraphQL enums to DB format
+        const dbInput = { ...input };
+        if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
+        if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        if (dbInput.visibility) dbInput.visibility = dbInput.visibility.toLowerCase();
+        
+        const project = await Project.findByIdAndUpdate(id, dbInput, {
           new: true,
           runValidators: true,
         });

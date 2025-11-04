@@ -33,13 +33,16 @@ class MilestoneSyncProcessor extends BaseSyncProcessor<IMilestone> {
     const ms = gitlabData.milestones[0];
     return {
       gitlabId: this.extractGitLabId(ms),
+      projectId: ms.project?.id ? String(this.extractNumericId(ms.project.id)) : '',
       iid: ms.iid || 0,
-      projectId: ms.project?.id ? this.extractNumericId(ms.project.id) : 0,
       title: ms.title || '',
       description: ms.description || '',
       state: ms.state === 'closed' ? 'closed' : 'active',
       dueDate: ms.dueDate ? new Date(ms.dueDate) : undefined,
       startDate: ms.startDate ? new Date(ms.startDate) : undefined,
+      webUrl: ms.webUrl || '',
+      issueIds: [],
+      mergeRequestIds: [],
       createdAt: ms.createdAt ? new Date(ms.createdAt) : syncTime,
       updatedAt: ms.updatedAt ? new Date(ms.updatedAt) : syncTime,
       lastSyncedAt: syncTime,
