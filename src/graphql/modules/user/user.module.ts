@@ -67,6 +67,16 @@ export const userModule = createModule({
       skills: [String!]
     }
 
+    input UserFilterInput {
+      status: UserStatus
+      department: String
+      role: String
+      isActive: Boolean
+      search: String
+      limit: Int
+      offset: Int
+    }
+
     extend type Query {
       user(id: ID!): User
       users(
@@ -75,7 +85,7 @@ export const userModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [User!]!
-      organizationUsers: [OrganizationUser!]!
+      organizationUsers(filter: UserFilterInput): [OrganizationUser!]!
       userByEmail(email: String!): User
       userByGitlabId(gitlabId: Int!): User
     }
@@ -129,8 +139,45 @@ export const userModule = createModule({
         }
         return user;
       },
-      organizationUsers: async () => {
-        return await User.find({ isActive: true }).sort({ name: 1 }).lean();
+      organizationUsers: async (_: any, { filter }: { filter?: any }) => {
+        const query: any = {};
+        
+        // Apply filters if provided
+        if (filter) {
+          if (filter.status !== undefined) {
+            // Convert GraphQL enum to DB format
+            query.status = filter.status.toLowerCase().replace(/_/g, '-');
+          }
+          if (filter.department !== undefined) {
+            query.department = filter.department;
+          }
+          if (filter.role !== undefined) {
+            query.role = filter.role;
+          }
+          if (filter.isActive !== undefined) {
+            query.isActive = filter.isActive;
+          }
+          if (filter.search) {
+            // Search in name, email, or username
+            query.$or = [
+              { name: { $regex: filter.search, $options: 'i' } },
+              { email: { $regex: filter.search, $options: 'i' } },
+              { username: { $regex: filter.search, $options: 'i' } }
+            ];
+          }
+        } else {
+          // Default: only active users if no filter provided
+          query.isActive = true;
+        }
+        
+        const limit = filter?.limit || 100;
+        const offset = filter?.offset || 0;
+        
+        return await User.find(query)
+          .limit(limit)
+          .skip(offset)
+          .sort({ name: 1 })
+          .lean();
       },
       userByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
         const user = await User.findByGitlabId(gitlabId);
