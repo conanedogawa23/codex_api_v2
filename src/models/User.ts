@@ -96,6 +96,11 @@ export interface IUser extends Document {
   authenticationType?: string;
   emailVerified?: boolean;
   phoneVerified?: boolean;
+  
+  // OTP Authentication
+  otp?: string;
+  otpExpiry?: Date;
+  otpAttempts?: number;
 
   // Organization & Management
   manager?: {
@@ -282,6 +287,11 @@ const UserSchema: Schema = new Schema({
   authenticationType: String,
   emailVerified: Boolean,
   phoneVerified: Boolean,
+  
+  // OTP Authentication
+  otp: String,
+  otpExpiry: Date,
+  otpAttempts: { type: Number, default: 0 },
 
   // Organization & Management
   manager: {

@@ -24,6 +24,15 @@ export interface EnvironmentConfig {
     apiUrl: string;
     token?: string;
   };
+  email: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    pass: string;
+    from: string;
+    fromName: string;
+  };
 }
 
 class Environment {
@@ -54,6 +63,15 @@ class Environment {
       gitlab: {
         apiUrl: process.env.GITLAB_GRAPHQL_URL || 'https://gitlab.com/api/graphql',
         token: process.env.GITLAB_PERSONAL_ACCESS_TOKEN,
+      },
+      email: {
+        host: process.env.EMAIL_HOST || '',
+        port: parseInt(process.env.EMAIL_PORT || '587', 10),
+        secure: process.env.EMAIL_SECURE === 'true',
+        user: process.env.EMAIL_USER || '',
+        pass: process.env.EMAIL_PASS || '',
+        from: process.env.EMAIL_FROM || 'noreply@codex.com',
+        fromName: process.env.EMAIL_FROM_NAME || 'Codex',
       },
     };
   }
