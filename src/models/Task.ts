@@ -14,7 +14,7 @@ export interface ITask extends Document {
   description?: string;
   status: 'pending' | 'in-progress' | 'completed' | 'delayed' | 'cancelled';
   priority: 'low' | 'medium' | 'high' | 'urgent';
-  projectId: string;
+  projectId: string; // REQUIRED: All tasks must be associated with a project
   assignedTo?: {
     id: string;
     name: string;

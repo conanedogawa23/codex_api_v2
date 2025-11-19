@@ -1,8 +1,10 @@
 import { createModule, gql } from 'graphql-modules';
 import { Project } from '../../../models/Project';
 import { Namespace } from '../../../models/Namespace';
+import { Task } from '../../../models/Task';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import { gitlabApi } from '../../../utils/gitlabApi';
 
 export const projectModule = createModule({
   id: 'project',
@@ -123,6 +125,7 @@ export const projectModule = createModule({
       name: String!
       description: String
       visibility: ProjectVisibility
+      namespaceId: Int
       status: ProjectStatus
       priority: ProjectPriority
       category: String!
@@ -167,7 +170,9 @@ export const projectModule = createModule({
     }
 
     extend type Mutation {
-      updateProject(id: ID!, input: UpdateProjectInput!): Project!
+      createProject(input: CreateProjectInput!): ProjectDetails!
+      updateProject(id: ID!, input: UpdateProjectInput!): ProjectDetails!
+      deleteProject(id: ID!): Boolean!
       updateProjectProgress(id: ID!, progress: Int!): Project!
       assignUserToProject(
         projectId: ID!
@@ -384,6 +389,86 @@ export const projectModule = createModule({
     },
 
     Mutation: {
+      createProject: async (_: any, { input }: any) => {
+        try {
+          logger.info('Creating new project', { name: input.name, namespaceId: input.namespaceId });
+
+          // Step 1: Create project in GitLab
+          const gitlabProject = await gitlabApi.createProject({
+            name: input.name,
+            description: input.description,
+            visibility: input.visibility?.toLowerCase() as 'private' | 'internal' | 'public',
+            namespace_id: input.namespaceId,
+          });
+
+          logger.info('GitLab project created successfully', {
+            gitlabId: gitlabProject.id,
+            name: gitlabProject.name,
+          });
+
+          // Step 2: Create project in MongoDB with GitLab data + custom fields
+          const now = new Date();
+          const projectData = {
+            gitlabId: gitlabProject.id,
+            name: gitlabProject.name,
+            nameWithNamespace: gitlabProject.name_with_namespace,
+            description: gitlabProject.description,
+            defaultBranch: gitlabProject.default_branch,
+            visibility: gitlabProject.visibility,
+            webUrl: gitlabProject.web_url,
+            httpUrlToRepo: gitlabProject.http_url_to_repo,
+            sshUrlToRepo: gitlabProject.ssh_url_to_repo,
+            pathWithNamespace: gitlabProject.path_with_namespace,
+            namespace: {
+              id: gitlabProject.namespace.id,
+              name: gitlabProject.namespace.name,
+              path: gitlabProject.namespace.path,
+              kind: gitlabProject.namespace.kind,
+            },
+            // Custom management fields
+            status: input.status?.toLowerCase().replace(/_/g, '-') || 'planned',
+            priority: input.priority?.toLowerCase() || 'medium',
+            category: input.category || 'Uncategorized',
+            department: input.department,
+            deadline: input.deadline,
+            progress: 0,
+            assignedTo: [],
+            tasks: {
+              total: 0,
+              completed: 0,
+              inProgress: 0,
+              pending: 0,
+            },
+            createdAt: new Date(gitlabProject.created_at),
+            updatedAt: now,
+            lastActivityAt: new Date(gitlabProject.last_activity_at),
+            lastSynced: now,
+            isActive: true,
+          };
+
+          const project = new Project(projectData);
+          await project.save();
+
+          logger.info('Project saved to MongoDB', {
+            id: project._id,
+            gitlabId: project.gitlabId,
+            name: project.name,
+          });
+
+          return project;
+        } catch (error) {
+          logger.error('Failed to create project', { error, input });
+          
+          // If error is from GitLab, it's already formatted as AppError
+          if (error instanceof AppError) {
+            throw error;
+          }
+          
+          // Handle other errors
+          throw new AppError('Failed to create project', 500);
+        }
+      },
+
       updateProject: async (_: any, { id, input }: any) => {
         // Convert GraphQL enums to DB format
         const dbInput = { ...input };
@@ -433,6 +518,43 @@ export const projectModule = createModule({
         }
         await project.unassignUser(userId);
         return await Project.findById(projectId).lean(); // Return updated project as lean object
+      },
+
+      deleteProject: async (_: any, { id }: { id: string }) => {
+        logger.info('Attempting to delete project', { projectId: id });
+
+        // Step 1: Check if project exists
+        const project = await Project.findById(id);
+        if (!project) {
+          throw new AppError('Project not found', 404);
+        }
+
+        // Step 2: Check for active tasks
+        const activeTasksCount = await Task.countDocuments({
+          projectId: id,
+          isActive: true,
+        });
+
+        if (activeTasksCount > 0) {
+          logger.warn('Cannot delete project with active tasks', {
+            projectId: id,
+            activeTasksCount,
+          });
+          throw new AppError(
+            `Cannot delete project with ${activeTasksCount} active task(s). Please complete or delete tasks first.`,
+            400
+          );
+        }
+
+        // Step 3: Soft delete (set isActive to false)
+        await Project.findByIdAndUpdate(id, { isActive: false });
+
+        logger.info('Project soft deleted successfully', {
+          projectId: id,
+          name: project.name,
+        });
+
+        return true;
       },
 
       syncProjectFromGitLab: async (_: any, { input }: any, { gitlabMCP }: any) => {

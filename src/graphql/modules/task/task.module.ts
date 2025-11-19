@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { Task } from '../../../models/Task';
+import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 
@@ -25,8 +26,7 @@ export const taskModule = createModule({
       description: String
       status: TaskStatus!
       priority: TaskPriority!
-      projectId: String
-      issueId: String
+      projectId: String!
       assignedTo: TaskAssignee
       assignedBy: TaskAssignee
       dueDate: DateTime
@@ -56,8 +56,7 @@ export const taskModule = createModule({
       description: String
       status: TaskStatus!
       priority: TaskPriority!
-      projectId: String
-      issueId: String
+      projectId: String!
       assignedTo: TaskAssignee
       assignedBy: TaskAssignee
       dueDate: DateTime
@@ -107,7 +106,6 @@ export const taskModule = createModule({
 
     input TaskFilterInput {
       projectId: String
-      issueId: String
       status: TaskStatus
       priority: TaskPriority
       assignedTo: String
@@ -120,8 +118,7 @@ export const taskModule = createModule({
       description: String
       status: TaskStatus
       priority: TaskPriority
-      projectId: String
-      issueId: String
+      projectId: String!
       assignedTo: String
       dueDate: DateTime
       estimatedHours: Float
@@ -142,7 +139,6 @@ export const taskModule = createModule({
       task(id: ID!): Task
       tasks(
         projectId: String
-        issueId: String
         status: TaskStatus
         priority: TaskPriority
         assignedTo: String
@@ -151,7 +147,6 @@ export const taskModule = createModule({
       ): [Task!]!
       tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
       tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20): [TaskDetails!]!
-      tasksByIssue(issueId: String!): [Task!]!
     }
 
     extend type Mutation {
@@ -173,6 +168,16 @@ export const taskModule = createModule({
         // Map database lowercase values to GraphQL uppercase values
         // DB: 'high' -> GraphQL: 'HIGH'
         return parent.priority?.toUpperCase();
+      },
+      assignedTo: (parent: any) => {
+        // Return null if assignedTo is missing or doesn't have required fields
+        if (!parent.assignedTo || !parent.assignedTo.id) return null;
+        return parent.assignedTo;
+      },
+      assignedBy: (parent: any) => {
+        // Return null if assignedBy is missing or doesn't have required fields
+        if (!parent.assignedBy || !parent.assignedBy.id) return null;
+        return parent.assignedBy;
       },
       completionPercentage: (parent: any) => parent.completionPercentage || 0,
       tags: (parent: any) => parent.tags || [],
@@ -204,6 +209,16 @@ export const taskModule = createModule({
       priority: (parent: any) => {
         return parent.priority?.toUpperCase();
       },
+      assignedTo: (parent: any) => {
+        // Return null if assignedTo is missing or doesn't have required fields
+        if (!parent.assignedTo || !parent.assignedTo.id) return null;
+        return parent.assignedTo;
+      },
+      assignedBy: (parent: any) => {
+        // Return null if assignedBy is missing or doesn't have required fields
+        if (!parent.assignedBy || !parent.assignedBy.id) return null;
+        return parent.assignedBy;
+      },
       completionPercentage: (parent: any) => parent.completionPercentage || 0,
       tags: (parent: any) => parent.tags || [],
       comments: (parent: any) => parent.comments || 0,
@@ -234,11 +249,10 @@ export const taskModule = createModule({
 
       tasks: async (
         _: any,
-        { projectId, issueId, status, priority, assignedTo, limit = 20, offset = 0 }: any
+        { projectId, status, priority, assignedTo, limit = 20, offset = 0 }: any
       ) => {
         const filter: any = { isActive: true };
         if (projectId) filter.projectId = projectId;
-        if (issueId) filter.issueId = issueId;
         // Convert GraphQL enum (uppercase underscore) to DB format (lowercase hyphen)
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (priority) filter.priority = priority.toLowerCase();
@@ -265,10 +279,6 @@ export const taskModule = createModule({
           .lean();
       },
 
-      tasksByIssue: async (_: any, { issueId }: { issueId: string }) => {
-        return await Task.find({ issueId, isActive: true }).sort({ priority: -1, dueDate: 1 }).lean();
-      },
-
       tasksByFilter: async (
         _: any,
         { filter, limit = 20, offset = 0 }: { filter: any; limit: number; offset: number }
@@ -277,7 +287,6 @@ export const taskModule = createModule({
 
         // Apply filters (convert GraphQL uppercase format to DB lowercase hyphen format)
         if (filter.projectId) query.projectId = filter.projectId;
-        if (filter.issueId) query.issueId = filter.issueId;
         if (filter.status) query.status = filter.status.toLowerCase().replace(/_/g, '-');
         if (filter.priority) query.priority = filter.priority.toLowerCase();
         if (filter.assignedTo) query['assignedTo.id'] = filter.assignedTo;
@@ -318,14 +327,34 @@ export const taskModule = createModule({
 
     Mutation: {
       createTask: async (_: any, { input }: any) => {
+        // Validate projectId is provided
+        if (!input.projectId) {
+          throw new AppError('projectId is required for creating a task', 400);
+        }
+
         // Convert GraphQL enum values to DB format
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
         
+        // If assignedTo is provided, fetch user details and populate the object
+        if (dbInput.assignedTo) {
+          const user = await User.findById(dbInput.assignedTo).lean();
+          if (user) {
+            dbInput.assignedTo = {
+              id: user._id.toString(),
+              name: user.name,
+              email: user.email,
+            };
+          } else {
+            logger.warn(`User not found for assignedTo: ${dbInput.assignedTo}`);
+            dbInput.assignedTo = undefined;
+          }
+        }
+        
         const task = new Task(dbInput);
         await task.save();
-        logger.info(`Created task: ${task.title}`);
+        logger.info(`Created task: ${task.title}`, { projectId: task.projectId });
         return task;
       },
 
@@ -334,6 +363,21 @@ export const taskModule = createModule({
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        
+        // If assignedTo is provided, fetch user details and populate the object
+        if (dbInput.assignedTo) {
+          const user = await User.findById(dbInput.assignedTo).lean();
+          if (user) {
+            dbInput.assignedTo = {
+              id: user._id.toString(),
+              name: user.name,
+              email: user.email,
+            };
+          } else {
+            logger.warn(`User not found for assignedTo: ${dbInput.assignedTo}`);
+            dbInput.assignedTo = undefined;
+          }
+        }
         
         const task = await Task.findByIdAndUpdate(id, dbInput, {
           new: true,

@@ -22,6 +22,7 @@ export interface EnvironmentConfig {
   };
   gitlab: {
     apiUrl: string;
+    graphqlUrl: string;
     token?: string;
   };
   email: {
@@ -61,7 +62,8 @@ class Environment {
         db: parseInt(process.env.REDIS_DB || '0', 10),
       },
       gitlab: {
-        apiUrl: process.env.GITLAB_GRAPHQL_URL || 'https://gitlab.com/api/graphql',
+        apiUrl: process.env.GITLAB_API_URL || 'https://gitlab.com/api/v4',
+        graphqlUrl: process.env.GITLAB_GRAPHQL_URL || 'https://gitlab.com/api/graphql',
         token: process.env.GITLAB_PERSONAL_ACCESS_TOKEN,
       },
       email: {
