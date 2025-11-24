@@ -12,6 +12,9 @@ import { pipelineModule } from './modules/pipeline/pipeline.module';
 import { milestoneModule } from './modules/milestone/milestone.module';
 import { labelModule } from './modules/label/label.module';
 import { taskModule } from './modules/task/task.module';
+import { taskCommentModule } from './modules/taskComment/taskComment.module';
+import { sprintModule } from './modules/sprint/sprint.module';
+import { boardModule } from './modules/board/board.module';
 import { commitModule } from './modules/commit/commit.module';
 import { discussionModule } from './modules/discussion/discussion.module';
 import { noteModule } from './modules/note/note.module';
@@ -38,6 +41,9 @@ export const application = createApplication({
     milestoneModule,
     labelModule,
     taskModule,
+    taskCommentModule,
+    sprintModule,
+    boardModule,
     commitModule,
     discussionModule,
     noteModule,

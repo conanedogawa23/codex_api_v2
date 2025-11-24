@@ -15,6 +15,9 @@ export interface ITask extends Document {
   status: 'pending' | 'in-progress' | 'completed' | 'delayed' | 'cancelled';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   projectId: string; // REQUIRED: All tasks must be associated with a project
+  sprintId?: string; // Optional: Sprint assignment (null for backlog tasks)
+  storyPoints?: number; // Optional: Story points for sprint planning
+  sprintOrder?: number; // Optional: Order within sprint
   assignedTo?: {
     id: string;
     name: string;
@@ -35,8 +38,10 @@ export interface ITask extends Document {
   subtasks: string[]; // Subtask IDs
   attachments: {
     name: string;
-    url: string;
+    url?: string; // Optional: for backward compatibility with URL-based attachments
+    data?: string; // Optional: base64 encoded file data
     type: string;
+    size?: number; // Optional: file size in bytes
   }[];
   lastSynced: Date;
   isActive: boolean;
@@ -48,6 +53,8 @@ export interface ITask extends Document {
   updateSyncTimestamp(): Promise<ITask>;
   addTag(tag: string): Promise<ITask>;
   removeTag(tag: string): Promise<ITask>;
+  addAttachment(attachment: any): Promise<ITask>;
+  removeAttachment(attachmentName: string): Promise<ITask>;
 }
 
 const TaskSchema: Schema = new Schema({
@@ -83,6 +90,18 @@ const TaskSchema: Schema = new Schema({
     required: true,
     index: true,
     ref: 'Project'
+  },
+  sprintId: {
+    type: String,
+    index: true,
+    ref: 'Sprint'
+  },
+  storyPoints: {
+    type: Number,
+    min: 0
+  },
+  sprintOrder: {
+    type: Number
   },
   assignedTo: {
     id: {
@@ -141,11 +160,19 @@ const TaskSchema: Schema = new Schema({
     },
     url: {
       type: String,
-      required: true
+      required: false // Optional for backward compatibility
+    },
+    data: {
+      type: String, // base64 encoded file data
+      required: false
     },
     type: {
       type: String,
       required: true
+    },
+    size: {
+      type: Number, // file size in bytes
+      required: false
     }
   }],
   lastSynced: {
@@ -168,6 +195,8 @@ TaskSchema.index({ priority: 1, dueDate: 1 });
 TaskSchema.index({ tags: 1 });
 TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ lastSynced: 1 });
+TaskSchema.index({ sprintId: 1, sprintOrder: 1 });
+TaskSchema.index({ projectId: 1, sprintId: 1 });
 
 // Virtual for overdue status
 TaskSchema.virtual('isOverdue').get(function() {
@@ -235,6 +264,34 @@ TaskSchema.methods.addTag = function(tag: string) {
 // Instance method to remove tag
 TaskSchema.methods.removeTag = function(tag: string) {
   this.tags = this.tags.filter((t: string) => t !== tag);
+  return this.save();
+};
+
+// Instance method to add attachment
+TaskSchema.methods.addAttachment = function(attachment: any) {
+  // Validate attachment has required fields
+  if (!attachment.name || !attachment.type) {
+    throw new Error('Attachment must have name and type');
+  }
+  
+  // Ensure either url or data is provided
+  if (!attachment.url && !attachment.data) {
+    throw new Error('Attachment must have either url or data');
+  }
+  
+  // Check for duplicate attachment names
+  const existingAttachment = this.attachments.find((a: any) => a.name === attachment.name);
+  if (existingAttachment) {
+    throw new Error(`Attachment with name "${attachment.name}" already exists`);
+  }
+  
+  this.attachments.push(attachment);
+  return this.save();
+};
+
+// Instance method to remove attachment
+TaskSchema.methods.removeAttachment = function(attachmentName: string) {
+  this.attachments = this.attachments.filter((a: any) => a.name !== attachmentName);
   return this.save();
 };
 

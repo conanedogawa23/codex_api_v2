@@ -15,8 +15,10 @@ export const taskModule = createModule({
 
     type TaskAttachment {
       name: String!
-      url: String!
+      url: String
+      data: String
       type: String!
+      size: Int
     }
 
     type Task {
@@ -27,6 +29,9 @@ export const taskModule = createModule({
       status: TaskStatus!
       priority: TaskPriority!
       projectId: String!
+      sprintId: String
+      storyPoints: Float
+      sprintOrder: Int
       assignedTo: TaskAssignee
       assignedBy: TaskAssignee
       dueDate: DateTime
@@ -40,6 +45,7 @@ export const taskModule = createModule({
       attachments: [TaskAttachment!]!
       isOverdue: Boolean!
       daysUntilDue: Int
+      lastSynced: DateTime!
       createdAt: DateTime!
       updatedAt: DateTime!
       completedAt: DateTime
@@ -57,6 +63,9 @@ export const taskModule = createModule({
       status: TaskStatus!
       priority: TaskPriority!
       projectId: String!
+      sprintId: String
+      storyPoints: Float
+      sprintOrder: Int
       assignedTo: TaskAssignee
       assignedBy: TaskAssignee
       dueDate: DateTime
@@ -70,6 +79,7 @@ export const taskModule = createModule({
       attachments: [TaskAttachment!]!
       isOverdue: Boolean!
       daysUntilDue: Int
+      lastSynced: DateTime!
       createdAt: DateTime!
       updatedAt: DateTime!
       completedAt: DateTime
@@ -109,6 +119,7 @@ export const taskModule = createModule({
       status: TaskStatus
       priority: TaskPriority
       assignedTo: String
+      sprintId: String
       dueDateFrom: DateTime
       dueDateTo: DateTime
     }
@@ -119,6 +130,8 @@ export const taskModule = createModule({
       status: TaskStatus
       priority: TaskPriority
       projectId: String!
+      sprintId: String
+      storyPoints: Float
       assignedTo: String
       dueDate: DateTime
       estimatedHours: Float
@@ -129,14 +142,26 @@ export const taskModule = createModule({
       description: String
       status: TaskStatus
       priority: TaskPriority
+      sprintId: String
+      storyPoints: Float
+      sprintOrder: Int
       assignedTo: String
       dueDate: DateTime
       estimatedHours: Float
       actualHours: Float
     }
 
+    input TaskAttachmentInput {
+      name: String!
+      url: String
+      data: String
+      type: String!
+      size: Int
+    }
+
     extend type Query {
       task(id: ID!): Task
+      taskDetails(taskId: ID!): TaskDetails
       tasks(
         projectId: String
         status: TaskStatus
@@ -147,6 +172,8 @@ export const taskModule = createModule({
       ): [Task!]!
       tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
       tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20): [TaskDetails!]!
+      tasksBySprint(sprintId: ID!, limit: Int = 100): [Task!]!
+      backlogTasks(projectId: ID!, limit: Int = 100): [Task!]!
     }
 
     extend type Mutation {
@@ -154,6 +181,12 @@ export const taskModule = createModule({
       updateTask(id: ID!, input: UpdateTaskInput!): Task!
       deleteTask(id: ID!): Boolean!
       completeTask(id: ID!, actualHours: Float): Task!
+      addTaskToSprint(taskId: ID!, sprintId: ID!, sprintOrder: Int): Task!
+      removeTaskFromSprint(taskId: ID!): Task!
+      updateTaskSprintOrder(taskId: ID!, sprintOrder: Int!): Task!
+      updateTaskStoryPoints(taskId: ID!, storyPoints: Float!): Task!
+      addTaskAttachment(taskId: ID!, attachment: TaskAttachmentInput!): Task!
+      removeTaskAttachment(taskId: ID!, attachmentName: String!): Task!
     }
   `,
   resolvers: {
@@ -247,6 +280,15 @@ export const taskModule = createModule({
         return task;
       },
 
+      taskDetails: async (_: any, { taskId }: { taskId: string }) => {
+        const task = await Task.findById(taskId).lean();
+        if (!task) {
+          throw new AppError('Task not found', 404);
+        }
+        logger.info(`Fetched task details for task ${taskId}`);
+        return task;
+      },
+
       tasks: async (
         _: any,
         { projectId, status, priority, assignedTo, limit = 20, offset = 0 }: any
@@ -290,6 +332,13 @@ export const taskModule = createModule({
         if (filter.status) query.status = filter.status.toLowerCase().replace(/_/g, '-');
         if (filter.priority) query.priority = filter.priority.toLowerCase();
         if (filter.assignedTo) query['assignedTo.id'] = filter.assignedTo;
+        if (filter.sprintId !== undefined) {
+          if (filter.sprintId === null || filter.sprintId === '') {
+            query.sprintId = { $exists: false };
+          } else {
+            query.sprintId = filter.sprintId;
+          }
+        }
         
         // Date range filters
         if (filter.dueDateFrom || filter.dueDateTo) {
@@ -322,6 +371,37 @@ export const taskModule = createModule({
           totalCount,
           statusSummary,
         };
+      },
+
+      tasksBySprint: async (_: any, { sprintId, limit = 100 }: { sprintId: string; limit: number }) => {
+        try {
+          return await Task.find({ sprintId, isActive: true })
+            .sort({ sprintOrder: 1, createdAt: 1 })
+            .limit(limit)
+            .lean();
+        } catch (error) {
+          logger.error('Error fetching tasks by sprint', { sprintId, error });
+          throw new AppError('Failed to fetch sprint tasks', 500);
+        }
+      },
+
+      backlogTasks: async (_: any, { projectId, limit = 100 }: { projectId: string; limit: number }) => {
+        try {
+          return await Task.find({
+            projectId,
+            isActive: true,
+            $or: [
+              { sprintId: { $exists: false } },
+              { sprintId: null }
+            ]
+          })
+            .sort({ priority: -1, createdAt: 1 })
+            .limit(limit)
+            .lean();
+        } catch (error) {
+          logger.error('Error fetching backlog tasks', { projectId, error });
+          throw new AppError('Failed to fetch backlog tasks', 500);
+        }
       },
     },
 
@@ -363,6 +443,17 @@ export const taskModule = createModule({
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        
+        // Auto-update completionPercentage and completedAt based on status
+        if (dbInput.status === 'completed') {
+          dbInput.completionPercentage = 100;
+          if (!dbInput.completedAt) {
+            dbInput.completedAt = new Date();
+          }
+        } else if (dbInput.status && dbInput.status !== 'completed') {
+          // If status is changed away from completed, clear completedAt
+          dbInput.completedAt = null;
+        }
         
         // If assignedTo is provided, fetch user details and populate the object
         if (dbInput.assignedTo) {
@@ -407,6 +498,7 @@ export const taskModule = createModule({
         const updateData: any = {
           status: 'completed',
           completedAt: new Date(),
+          completionPercentage: 100, // Set to 100% when completing
         };
         if (actualHours !== undefined) {
           updateData.actualHours = actualHours;
@@ -421,6 +513,152 @@ export const taskModule = createModule({
         }
         logger.info(`Completed task: ${task.title}`);
         return task;
+      },
+
+      addTaskToSprint: async (
+        _: any,
+        { taskId, sprintId, sprintOrder }: { taskId: string; sprintId: string; sprintOrder?: number }
+      ) => {
+        try {
+          const updateData: any = { sprintId };
+          if (sprintOrder !== undefined) {
+            updateData.sprintOrder = sprintOrder;
+          }
+
+          const task = await Task.findByIdAndUpdate(
+            taskId,
+            { $set: updateData },
+            { new: true, runValidators: true }
+          );
+
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          logger.info('Task added to sprint', { taskId, sprintId });
+          return task;
+        } catch (error) {
+          logger.error('Error adding task to sprint', { taskId, sprintId, error });
+          throw error;
+        }
+      },
+
+      removeTaskFromSprint: async (_: any, { taskId }: { taskId: string }) => {
+        try {
+          const task = await Task.findByIdAndUpdate(
+            taskId,
+            { $unset: { sprintId: '', sprintOrder: '' } },
+            { new: true, runValidators: true }
+          );
+
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          logger.info('Task removed from sprint', { taskId });
+          return task;
+        } catch (error) {
+          logger.error('Error removing task from sprint', { taskId, error });
+          throw error;
+        }
+      },
+
+      updateTaskSprintOrder: async (
+        _: any,
+        { taskId, sprintOrder }: { taskId: string; sprintOrder: number }
+      ) => {
+        try {
+          const task = await Task.findByIdAndUpdate(
+            taskId,
+            { $set: { sprintOrder } },
+            { new: true, runValidators: true }
+          );
+
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          logger.info('Task sprint order updated', { taskId, sprintOrder });
+          return task;
+        } catch (error) {
+          logger.error('Error updating task sprint order', { taskId, error });
+          throw error;
+        }
+      },
+
+      updateTaskStoryPoints: async (
+        _: any,
+        { taskId, storyPoints }: { taskId: string; storyPoints: number }
+      ) => {
+        try {
+          const task = await Task.findByIdAndUpdate(
+            taskId,
+            { $set: { storyPoints } },
+            { new: true, runValidators: true }
+          );
+
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          logger.info('Task story points updated', { taskId, storyPoints });
+          return task;
+        } catch (error) {
+          logger.error('Error updating task story points', { taskId, error });
+          throw error;
+        }
+      },
+
+      addTaskAttachment: async (
+        _: any,
+        { taskId, attachment }: { taskId: string; attachment: any }
+      ) => {
+        try {
+          const task = await Task.findById(taskId);
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          // Validate file size (5MB limit for base64)
+          const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+          if (attachment.size && attachment.size > maxSize) {
+            throw new AppError('File size exceeds 5MB limit', 400);
+          }
+
+          // Check total attachments size (20MB limit per task)
+          const totalSize = task.attachments.reduce((sum: number, att: any) => sum + (att.size || 0), 0);
+          if (totalSize + (attachment.size || 0) > 20 * 1024 * 1024) {
+            throw new AppError('Total attachments size exceeds 20MB limit', 400);
+          }
+
+          await task.addAttachment(attachment);
+
+          logger.info('Attachment added to task', { taskId, attachmentName: attachment.name });
+          return task;
+        } catch (error) {
+          logger.error('Error adding task attachment', { taskId, error });
+          throw error;
+        }
+      },
+
+      removeTaskAttachment: async (
+        _: any,
+        { taskId, attachmentName }: { taskId: string; attachmentName: string }
+      ) => {
+        try {
+          const task = await Task.findById(taskId);
+          if (!task) {
+            throw new AppError('Task not found', 404);
+          }
+
+          await task.removeAttachment(attachmentName);
+
+          logger.info('Attachment removed from task', { taskId, attachmentName });
+          return task;
+        } catch (error) {
+          logger.error('Error removing task attachment', { taskId, error });
+          throw error;
+        }
       },
     },
   },

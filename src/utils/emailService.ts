@@ -26,25 +26,71 @@ class EmailService {
     }
 
     try {
+      // Determine if we should use SSL/TLS or STARTTLS based on port
+      const isSSLPort = emailConfig.port === 465;
+      
+      // For port 587, force secure to false to use STARTTLS
+      // For port 465, use SSL directly
+      const useSecure = isSSLPort ? true : false;
+
       this.transporter = nodemailer.createTransport({
         host: emailConfig.host,
         port: emailConfig.port,
-        secure: emailConfig.secure, // true for 465, false for other ports
+        secure: useSecure, // true for 465 (SSL), false for 25/587 (STARTTLS)
         auth: {
           user: emailConfig.user,
           pass: emailConfig.pass,
         },
+        tls: {
+          // More permissive TLS settings for compatibility
+          rejectUnauthorized: false,
+          // Don't validate server identity
+          checkServerIdentity: () => undefined,
+        },
+        // Connection timeout settings
+        connectionTimeout: 10000, // 10 seconds
+        greetingTimeout: 10000,
+        socketTimeout: 20000,
+        // Debug logging in non-production
+        debug: process.env.NODE_ENV !== 'production',
+        logger: process.env.NODE_ENV !== 'production',
       });
 
       this.isConfigured = true;
       logger.info('Email service initialized successfully', {
         host: emailConfig.host,
         port: emailConfig.port,
+        secure: useSecure,
+        configSecure: emailConfig.secure,
         from: emailConfig.from,
+        environment: process.env.NODE_ENV,
+        hint: useSecure ? 'Using direct SSL/TLS' : 'Using STARTTLS upgrade',
       });
+
+      // Verify connection on initialization (optional, non-blocking)
+      this.verifyConnection();
     } catch (error: any) {
       logger.error('Failed to initialize email service', {
         error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Verify email service connection
+   */
+  private async verifyConnection(): Promise<void> {
+    if (!this.transporter) {
+      return;
+    }
+
+    try {
+      await this.transporter.verify();
+      logger.info('Email service connection verified');
+    } catch (error: any) {
+      logger.warn('Email service connection verification failed', {
+        error: error.message,
+        hint: 'Email service may not work correctly. Check SMTP credentials and TLS settings.',
       });
     }
   }
@@ -82,11 +128,25 @@ class EmailService {
 
       return true;
     } catch (error: any) {
-      logger.error('Failed to send email', {
+      // Provide detailed error information
+      const errorDetails: any = {
         to: options.to,
         subject: options.subject,
         error: error.message,
-      });
+      };
+
+      // Add specific error hints based on error type
+      if (error.message.includes('SSL') || error.message.includes('TLS')) {
+        errorDetails.hint = 'SSL/TLS connection error. Check EMAIL_PORT (587 for STARTTLS, 465 for SSL) and EMAIL_SECURE settings.';
+      } else if (error.message.includes('authentication')) {
+        errorDetails.hint = 'Authentication failed. Check EMAIL_USER and EMAIL_PASS credentials.';
+      } else if (error.message.includes('ECONNREFUSED')) {
+        errorDetails.hint = 'Connection refused. Check EMAIL_HOST and EMAIL_PORT are correct and accessible.';
+      } else if (error.message.includes('timeout')) {
+        errorDetails.hint = 'Connection timeout. Check network connectivity and firewall settings.';
+      }
+
+      logger.error('Failed to send email', errorDetails);
       return false;
     }
   }
