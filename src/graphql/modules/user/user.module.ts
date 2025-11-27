@@ -14,6 +14,7 @@ export const userModule = createModule({
       role: String!
       department: String!
       avatar: String
+      webUrl: String
       joinDate: DateTime!
       status: UserStatus!
       skills: [String!]!
@@ -37,6 +38,7 @@ export const userModule = createModule({
       role: String!
       department: String!
       avatar: String
+      webUrl: String
       joinDate: DateTime!
       status: UserStatus!
       skills: [String!]!
@@ -104,6 +106,8 @@ export const userModule = createModule({
         // DB: 'on-leave' -> GraphQL: 'ON_LEAVE'
         return parent.status?.replace(/-/g, '_').toUpperCase();
       },
+      joinDate: (parent: any) => parent.joinDate || parent.createdAt || new Date(),
+      lastSynced: (parent: any) => parent.lastSynced || parent.createdAt || new Date(),
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
     },
@@ -113,6 +117,8 @@ export const userModule = createModule({
       status: (parent: any) => {
         return parent.status?.replace(/-/g, '_').toUpperCase();
       },
+      joinDate: (parent: any) => parent.joinDate || parent.createdAt || new Date(),
+      lastSynced: (parent: any) => parent.lastSynced || parent.createdAt || new Date(),
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
     },
