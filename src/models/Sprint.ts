@@ -3,19 +3,34 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface ISprint extends Document {
   name: string;
   description?: string;
-  projectId: string;
+  sprintRepoId: string; // References SprintRepo (not Project)
+  assignees: {
+    id: string;
+    name: string;
+    email: string;
+  }[];
   startDate: Date;
   endDate: Date;
   goal?: string;
   status: 'planned' | 'active' | 'completed' | 'cancelled';
   velocity?: number;
   capacity?: number;
+  progress: {
+    totalTasks: number;
+    completedTasks: number;
+    percentage: number;
+  };
   createdAt: Date;
   updatedAt: Date;
   isActive: boolean;
   
   duration: number;
   isOverdue: boolean;
+  
+  // Instance methods
+  assignUser(userId: string, userName: string, email: string): Promise<ISprint>;
+  unassignUser(userId: string): Promise<ISprint>;
+  updateProgress(totalTasks: number, completedTasks: number): Promise<ISprint>;
 }
 
 const SprintSchema: Schema = new Schema({
@@ -28,12 +43,26 @@ const SprintSchema: Schema = new Schema({
     type: String,
     trim: true
   },
-  projectId: {
+  sprintRepoId: {
     type: String,
     required: true,
     index: true,
-    ref: 'Project'
+    ref: 'SprintRepo'
   },
+  assignees: [{
+    id: {
+      type: String,
+      required: true
+    },
+    name: {
+      type: String,
+      required: true
+    },
+    email: {
+      type: String,
+      required: true
+    }
+  }],
   startDate: {
     type: Date,
     required: true
@@ -60,6 +89,24 @@ const SprintSchema: Schema = new Schema({
     type: Number,
     min: 0
   },
+  progress: {
+    totalTasks: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    completedTasks: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    percentage: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100
+    }
+  },
   isActive: {
     type: Boolean,
     default: true,
@@ -70,8 +117,9 @@ const SprintSchema: Schema = new Schema({
   collection: 'sprints'
 });
 
-SprintSchema.index({ projectId: 1, status: 1 });
-SprintSchema.index({ projectId: 1, startDate: 1, endDate: 1 });
+SprintSchema.index({ sprintRepoId: 1, status: 1 });
+SprintSchema.index({ sprintRepoId: 1, startDate: 1, endDate: 1 });
+SprintSchema.index({ 'assignees.id': 1 });
 
 SprintSchema.virtual('duration').get(function(this: ISprint) {
   return Math.ceil((this.endDate.getTime() - this.startDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -80,6 +128,32 @@ SprintSchema.virtual('duration').get(function(this: ISprint) {
 SprintSchema.virtual('isOverdue').get(function(this: ISprint) {
   return this.status !== 'completed' && this.status !== 'cancelled' && this.endDate < new Date();
 });
+
+// Instance method to assign user
+SprintSchema.methods.assignUser = function(userId: string, userName: string, email: string) {
+  const existingAssignment = this.assignees.find((assignee: { id: string; name: string; email: string }) => assignee.id === userId);
+  if (!existingAssignment) {
+    this.assignees.push({ id: userId, name: userName, email });
+    return this.save();
+  }
+  return this;
+};
+
+// Instance method to unassign user
+SprintSchema.methods.unassignUser = function(userId: string) {
+  this.assignees = this.assignees.filter((assignee: { id: string; name: string; email: string }) => assignee.id !== userId);
+  return this.save();
+};
+
+// Instance method to update progress
+SprintSchema.methods.updateProgress = function(totalTasks: number, completedTasks: number) {
+  this.progress = {
+    totalTasks,
+    completedTasks,
+    percentage: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
+  };
+  return this.save();
+};
 
 export const Sprint = mongoose.model<ISprint>('Sprint', SprintSchema);
 

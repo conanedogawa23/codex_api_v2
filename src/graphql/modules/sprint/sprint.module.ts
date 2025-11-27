@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { Sprint } from '../../../models/Sprint';
+import { SprintRepo } from '../../../models/SprintRepo';
 import { Task } from '../../../models/Task';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
@@ -11,7 +12,10 @@ export const sprintModule = createModule({
       id: ID!
       name: String!
       description: String
-      projectId: String!
+      sprintRepoId: String!
+      sprintRepo: SprintRepo
+      assignees: [SprintAssignee!]!
+      progress: SprintProgress!
       startDate: DateTime!
       endDate: DateTime!
       goal: String
@@ -26,6 +30,18 @@ export const sprintModule = createModule({
       isActive: Boolean!
     }
 
+    type SprintAssignee {
+      id: String!
+      name: String!
+      email: String!
+    }
+
+    type SprintProgress {
+      totalTasks: Int!
+      completedTasks: Int!
+      percentage: Int!
+    }
+
     enum SprintStatus {
       PLANNED
       ACTIVE
@@ -33,10 +49,17 @@ export const sprintModule = createModule({
       CANCELLED
     }
 
+    input SprintAssigneeInput {
+      id: String!
+      name: String!
+      email: String!
+    }
+
     input CreateSprintInput {
       name: String!
       description: String
-      projectId: String!
+      sprintRepoId: String!
+      assignees: [SprintAssigneeInput!]
       startDate: DateTime!
       endDate: DateTime!
       goal: String
@@ -46,6 +69,7 @@ export const sprintModule = createModule({
     input UpdateSprintInput {
       name: String
       description: String
+      assignees: [SprintAssigneeInput!]
       startDate: DateTime
       endDate: DateTime
       goal: String
@@ -57,8 +81,9 @@ export const sprintModule = createModule({
     extend type Query {
       sprint(id: ID!): Sprint
       sprints(limit: Int = 20, offset: Int = 0): [Sprint!]!
-      sprintsByProject(projectId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
-      activeSprints(projectId: ID): [Sprint!]!
+      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      activeSprints(sprintRepoId: ID): [Sprint!]!
     }
 
     extend type Mutation {
@@ -67,11 +92,27 @@ export const sprintModule = createModule({
       deleteSprint(id: ID!): Boolean!
       startSprint(id: ID!): Sprint!
       completeSprint(id: ID!, velocity: Float): Sprint!
+      assignUserToSprint(sprintId: ID!, userId: String!, userName: String!, email: String!): Sprint!
+      unassignUserFromSprint(sprintId: ID!, userId: String!): Sprint!
+      updateSprintProgress(sprintId: ID!, totalTasks: Int!, completedTasks: Int!): Sprint!
     }
   `,
   resolvers: {
     Sprint: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      sprintRepo: async (parent: any) => {
+        try {
+          const sprintRepo = await SprintRepo.findById(parent.sprintRepoId).lean();
+          return sprintRepo;
+        } catch (error) {
+          logger.error('Error fetching sprint repo for sprint', { sprintId: parent._id || parent.id, error });
+          return null;
+        }
+      },
+      assignees: (parent: any) => parent.assignees || [],
+      progress: (parent: any) => {
+        return parent.progress || { totalTasks: 0, completedTasks: 0, percentage: 0 };
+      },
       status: (parent: any) => {
         return parent.status?.toUpperCase();
       },
@@ -122,12 +163,12 @@ export const sprintModule = createModule({
         }
       },
 
-      sprintsByProject: async (
+      sprintsBySprintRepo: async (
         _: any,
-        { projectId, status, limit }: { projectId: string; status?: string; limit: number }
+        { sprintRepoId, status, limit }: { sprintRepoId: string; status?: string; limit: number }
       ) => {
         try {
-          const filter: any = { projectId, isActive: true };
+          const filter: any = { sprintRepoId, isActive: true };
           if (status) {
             filter.status = status.toLowerCase();
           }
@@ -137,23 +178,43 @@ export const sprintModule = createModule({
             .limit(limit)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprints by project', { projectId, status, error });
-          throw new AppError('Failed to fetch sprints for project', 500);
+          logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, error });
+          throw new AppError('Failed to fetch sprints for sprint repo', 500);
         }
       },
 
-      activeSprints: async (_: any, { projectId }: { projectId?: string }) => {
+      sprintsByAssignee: async (
+        _: any,
+        { userId, status, limit }: { userId: string; status?: string; limit: number }
+      ) => {
+        try {
+          const filter: any = { 'assignees.id': userId, isActive: true };
+          if (status) {
+            filter.status = status.toLowerCase();
+          }
+
+          return await Sprint.find(filter)
+            .sort({ startDate: -1 })
+            .limit(limit)
+            .lean();
+        } catch (error) {
+          logger.error('Error fetching sprints by assignee', { userId, status, error });
+          throw new AppError('Failed to fetch sprints for assignee', 500);
+        }
+      },
+
+      activeSprints: async (_: any, { sprintRepoId }: { sprintRepoId?: string }) => {
         try {
           const filter: any = { status: 'active', isActive: true };
-          if (projectId) {
-            filter.projectId = projectId;
+          if (sprintRepoId) {
+            filter.sprintRepoId = sprintRepoId;
           }
 
           return await Sprint.find(filter)
             .sort({ startDate: -1 })
             .lean();
         } catch (error) {
-          logger.error('Error fetching active sprints', { projectId, error });
+          logger.error('Error fetching active sprints', { sprintRepoId, error });
           throw new AppError('Failed to fetch active sprints', 500);
         }
       }
@@ -167,9 +228,15 @@ export const sprintModule = createModule({
             throw new AppError('End date must be after start date', 400);
           }
 
-          // Check for overlapping sprints in the same project
+          // Verify sprint repo exists
+          const sprintRepo = await SprintRepo.findById(input.sprintRepoId);
+          if (!sprintRepo) {
+            throw new AppError('Sprint repository not found', 404);
+          }
+
+          // Check for overlapping sprints in the same sprint repo
           const overlapping = await Sprint.findOne({
-            projectId: input.projectId,
+            sprintRepoId: input.sprintRepoId,
             isActive: true,
             status: { $in: ['planned', 'active'] },
             $or: [
@@ -183,11 +250,17 @@ export const sprintModule = createModule({
 
           const sprint = new Sprint({
             ...input,
+            assignees: input.assignees || [],
+            progress: {
+              totalTasks: 0,
+              completedTasks: 0,
+              percentage: 0
+            },
             status: 'planned'
           });
 
           await sprint.save();
-          logger.info('Sprint created', { sprintId: sprint._id, projectId: input.projectId });
+          logger.info('Sprint created', { sprintId: sprint._id, sprintRepoId: input.sprintRepoId });
           return sprint.toObject();
         } catch (error) {
           logger.error('Error creating sprint', { input, error });
@@ -307,6 +380,63 @@ export const sprintModule = createModule({
           return sprint.toObject();
         } catch (error) {
           logger.error('Error completing sprint', { id, error });
+          throw error;
+        }
+      },
+
+      assignUserToSprint: async (
+        _: any,
+        { sprintId, userId, userName, email }: { sprintId: string; userId: string; userName: string; email: string }
+      ) => {
+        try {
+          const sprint = await Sprint.findById(sprintId);
+          if (!sprint) {
+            throw new AppError('Sprint not found', 404);
+          }
+
+          await sprint.assignUser(userId, userName, email);
+          logger.info('User assigned to sprint', { sprintId, userId });
+          return sprint.toObject();
+        } catch (error) {
+          logger.error('Error assigning user to sprint', { sprintId, userId, error });
+          throw error;
+        }
+      },
+
+      unassignUserFromSprint: async (
+        _: any,
+        { sprintId, userId }: { sprintId: string; userId: string }
+      ) => {
+        try {
+          const sprint = await Sprint.findById(sprintId);
+          if (!sprint) {
+            throw new AppError('Sprint not found', 404);
+          }
+
+          await sprint.unassignUser(userId);
+          logger.info('User unassigned from sprint', { sprintId, userId });
+          return sprint.toObject();
+        } catch (error) {
+          logger.error('Error unassigning user from sprint', { sprintId, userId, error });
+          throw error;
+        }
+      },
+
+      updateSprintProgress: async (
+        _: any,
+        { sprintId, totalTasks, completedTasks }: { sprintId: string; totalTasks: number; completedTasks: number }
+      ) => {
+        try {
+          const sprint = await Sprint.findById(sprintId);
+          if (!sprint) {
+            throw new AppError('Sprint not found', 404);
+          }
+
+          await sprint.updateProgress(totalTasks, completedTasks);
+          logger.info('Sprint progress updated', { sprintId, totalTasks, completedTasks });
+          return sprint.toObject();
+        } catch (error) {
+          logger.error('Error updating sprint progress', { sprintId, error });
           throw error;
         }
       }
