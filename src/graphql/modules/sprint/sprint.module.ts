@@ -69,6 +69,7 @@ export const sprintModule = createModule({
     input UpdateSprintInput {
       name: String
       description: String
+      sprintRepoId: String
       assignees: [SprintAssigneeInput!]
       startDate: DateTime
       endDate: DateTime
