@@ -1,6 +1,7 @@
 import { createModule, gql } from 'graphql-modules';
 import { SprintRepo } from '../../../models/SprintRepo';
 import { Sprint } from '../../../models/Sprint';
+import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import mongoose from 'mongoose';
@@ -15,9 +16,13 @@ export const sprintRepoModule = createModule({
       description: String
       ownerId: String!
       ownerName: String!
+      ownerUserId: ID
+      owner: User
       groupId: String
       groupName: String
       status: SprintRepoStatus!
+      zohoProjectId: String
+      source: String
       startDate: DateTime
       endDate: DateTime
       duration: Int
@@ -76,6 +81,17 @@ export const sprintRepoModule = createModule({
   resolvers: {
     SprintRepo: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      owner: async (parent: any) => {
+        try {
+          if (!parent.ownerUserId) return null;
+          const user = await User.findById(parent.ownerUserId).lean();
+          return user;
+        } catch (error) {
+          logger.error('Error fetching owner user for sprint repo', { sprintRepoId: parent._id || parent.id, error });
+          return null;
+        }
+      },
+      ownerUserId: (parent: any) => parent.ownerUserId?.toString() || null,
       status: (parent: any) => {
         return parent.status?.toUpperCase();
       },
