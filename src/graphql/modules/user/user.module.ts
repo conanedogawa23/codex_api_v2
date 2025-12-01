@@ -22,6 +22,10 @@ export const userModule = createModule({
       projects: [UserProject!]!
       lastSynced: DateTime!
       isActive: Boolean!
+      source: String
+      zohoSprintsUserId: String
+      zohoSprintsRoleId: String
+      zohoSprintsProfileId: String
       createdAt: DateTime!
       updatedAt: DateTime!
     }
@@ -46,6 +50,10 @@ export const userModule = createModule({
       projects: [UserProject!]!
       lastSynced: DateTime!
       isActive: Boolean!
+      source: String
+      zohoSprintsUserId: String
+      zohoSprintsRoleId: String
+      zohoSprintsProfileId: String
       createdAt: DateTime!
       updatedAt: DateTime!
     }

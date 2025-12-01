@@ -2,6 +2,7 @@ import { createModule, gql } from 'graphql-modules';
 import { Sprint } from '../../../models/Sprint';
 import { SprintRepo } from '../../../models/SprintRepo';
 import { Task } from '../../../models/Task';
+import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 
@@ -20,6 +21,13 @@ export const sprintModule = createModule({
       endDate: DateTime!
       goal: String
       status: SprintStatus!
+      statusUserName: String
+      statusUserId: ID
+      statusUser: User
+      zohoSprintId: String
+      zohoProjectId: String
+      projectName: String
+      source: String
       velocity: Float
       capacity: Float
       duration: Int!
@@ -110,6 +118,17 @@ export const sprintModule = createModule({
           return null;
         }
       },
+      statusUser: async (parent: any) => {
+        try {
+          if (!parent.statusUserId) return null;
+          const user = await User.findById(parent.statusUserId).lean();
+          return user;
+        } catch (error) {
+          logger.error('Error fetching status user for sprint', { sprintId: parent._id || parent.id, error });
+          return null;
+        }
+      },
+      statusUserId: (parent: any) => parent.statusUserId?.toString() || null,
       assignees: (parent: any) => parent.assignees || [],
       progress: (parent: any) => {
         return parent.progress || { totalTasks: 0, completedTasks: 0, percentage: 0 };
