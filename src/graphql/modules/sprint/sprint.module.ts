@@ -14,7 +14,7 @@ export const sprintModule = createModule({
       id: ID!
       name: String!
       description: String
-      sprintRepoId: String!
+      sprintRepoId: String
       sprintRepo: SprintRepo
       assignees: [SprintAssignee!]!
       progress: SprintProgress!
