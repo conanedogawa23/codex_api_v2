@@ -1,4 +1,5 @@
 import { createModule, gql } from 'graphql-modules';
+import mongoose from 'mongoose';
 import { Sprint } from '../../../models/Sprint';
 import { SprintRepo } from '../../../models/SprintRepo';
 import { Task } from '../../../models/Task';
@@ -20,7 +21,9 @@ export const sprintModule = createModule({
       startDate: DateTime
       endDate: DateTime
       goal: String
-      status: SprintStatus!
+      status: String
+      statusName: String
+      statusType: Int
       statusUserName: String
       statusUserId: ID
       statusUser: User
@@ -50,13 +53,6 @@ export const sprintModule = createModule({
       percentage: Int!
     }
 
-    enum SprintStatus {
-      PLANNED
-      ACTIVE
-      COMPLETED
-      CANCELLED
-    }
-
     input SprintAssigneeInput {
       id: String!
       name: String!
@@ -84,14 +80,14 @@ export const sprintModule = createModule({
       goal: String
       capacity: Float
       velocity: Float
-      status: SprintStatus
+      status: String
     }
 
     extend type Query {
       sprint(id: ID!): Sprint
       sprints(limit: Int = 20, offset: Int = 0): [Sprint!]!
-      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
-      sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      sprintsBySprintRepo(sprintRepoId: ID!, status: String, limit: Int = 20): [Sprint!]!
+      sprintsByAssignee(userId: ID!, status: String, limit: Int = 20): [Sprint!]!
       activeSprints(sprintRepoId: ID): [Sprint!]!
     }
 
@@ -118,6 +114,29 @@ export const sprintModule = createModule({
           return null;
         }
       },
+      projectName: async (parent: any) => {
+        try {
+          // Return stored projectName if available
+          if (parent.projectName) return parent.projectName;
+          
+          // Otherwise fetch from SprintRepo
+          if (parent.sprintRepoId) {
+            const sprintRepo = await SprintRepo.findById(parent.sprintRepoId).select('name').lean();
+            return sprintRepo?.name || null;
+          }
+          
+          // For Zoho sprints without sprintRepoId, try to find by zohoProjectId
+          if (parent.zohoProjectId) {
+            const sprintRepo = await SprintRepo.findOne({ zohoProjectId: parent.zohoProjectId }).select('name').lean();
+            return sprintRepo?.name || null;
+          }
+          
+          return null;
+        } catch (error) {
+          logger.error('Error fetching project name for sprint', { sprintId: parent._id || parent.id, error });
+          return null;
+        }
+      },
       statusUser: async (parent: any) => {
         try {
           if (!parent.statusUserId) return null;
@@ -134,7 +153,8 @@ export const sprintModule = createModule({
         return parent.progress || { totalTasks: 0, completedTasks: 0, percentage: 0 };
       },
       status: (parent: any) => {
-        return parent.status?.toUpperCase();
+        // Return status as-is (can be Zoho user ID or text status like "active")
+        return parent.status || null;
       },
       duration: (parent: any) => {
         if (!parent.startDate || !parent.endDate) return null;
@@ -149,7 +169,20 @@ export const sprintModule = createModule({
       },
       taskCount: async (parent: any) => {
         try {
-          const count = await Task.countDocuments({ sprintId: parent._id || parent.id, isActive: true });
+          const sprintIdString = parent._id?.toString() || parent.id;
+          
+          // Use raw MongoDB collection to bypass Mongoose schema casting
+          const db = mongoose.connection.db;
+          const tasksCollection = db.collection('tasks');
+          
+          const filter: any = {
+            $or: [
+              { sprintId: sprintIdString, isActive: true },  // String match
+              { sprintId: new mongoose.Types.ObjectId(sprintIdString), isActive: true }  // ObjectId match
+            ]
+          };
+          
+          const count = await tasksCollection.countDocuments(filter);
           return count;
         } catch (error) {
           logger.error('Error counting tasks for sprint', { sprintId: parent._id || parent.id, error });
@@ -190,15 +223,30 @@ export const sprintModule = createModule({
         { sprintRepoId, status, limit }: { sprintRepoId: string; status?: string; limit: number }
       ) => {
         try {
-          const filter: any = { sprintRepoId, isActive: true };
+          // Use raw MongoDB collection to bypass Mongoose schema casting
+          // (sprintRepoId is defined as String in schema but stored as ObjectId in DB)
+          const db = mongoose.connection.db;
+          const sprintsCollection = db.collection('sprints');
+          
+          const filter: any = { 
+            $or: [
+              { sprintRepoId: sprintRepoId },  // String match
+              { sprintRepoId: new mongoose.Types.ObjectId(sprintRepoId) }  // ObjectId match
+            ],
+            isActive: true 
+          };
+          
           if (status) {
-            filter.status = status.toLowerCase();
+            filter.status = status;
           }
 
-          return await Sprint.find(filter)
+          const results = await sprintsCollection
+            .find(filter)
             .sort({ startDate: -1 })
             .limit(limit)
-            .lean();
+            .toArray();
+          
+          return results;
         } catch (error) {
           logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, error });
           throw new AppError('Failed to fetch sprints for sprint repo', 500);
@@ -210,9 +258,10 @@ export const sprintModule = createModule({
         { userId, status, limit }: { userId: string; status?: string; limit: number }
       ) => {
         try {
+          // Note: assignees.id is stored as string in the database, no ObjectId conversion needed
           const filter: any = { 'assignees.id': userId, isActive: true };
           if (status) {
-            filter.status = status.toLowerCase();
+            filter.status = status; // Use status as-is (supports Zoho user IDs)
           }
 
           return await Sprint.find(filter)
@@ -297,11 +346,6 @@ export const sprintModule = createModule({
             if (new Date(input.endDate) <= new Date(input.startDate)) {
               throw new AppError('End date must be after start date', 400);
             }
-          }
-
-          // Map status from GraphQL enum to database value
-          if (input.status) {
-            input.status = input.status.toLowerCase();
           }
 
           const sprint = await Sprint.findByIdAndUpdate(

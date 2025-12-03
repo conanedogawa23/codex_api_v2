@@ -12,7 +12,13 @@ export interface ISprint extends Document {
   startDate: Date;
   endDate: Date;
   goal?: string;
-  status: 'planned' | 'active' | 'completed' | 'cancelled';
+  status: string; // Can be Zoho user ID or text status like 'active', 'planned', etc.
+  statusName?: string; // Enriched status name (Upcoming, Active, Completed, Canceled)
+  statusType?: number; // 1: Upcoming, 2: Active, 3: Completed, 4: Canceled
+  zohoSprintId?: string;
+  zohoProjectId?: string;
+  projectName?: string; // Project name (from SprintRepo)
+  source?: string; // 'zoho_sprints' or null for local
   velocity?: number;
   capacity?: number;
   progress: {
@@ -77,9 +83,29 @@ const SprintSchema: Schema = new Schema({
   },
   status: {
     type: String,
-    enum: ['planned', 'active', 'completed', 'cancelled'],
     default: 'planned',
     index: true
+    // No enum restriction - supports Zoho user IDs and text statuses
+  },
+  statusName: {
+    type: String
+  },
+  statusType: {
+    type: Number
+  },
+  zohoSprintId: {
+    type: String,
+    index: true
+  },
+  zohoProjectId: {
+    type: String,
+    index: true
+  },
+  projectName: {
+    type: String
+  },
+  source: {
+    type: String
   },
   velocity: {
     type: Number,
@@ -126,7 +152,10 @@ SprintSchema.virtual('duration').get(function(this: ISprint) {
 });
 
 SprintSchema.virtual('isOverdue').get(function(this: ISprint) {
-  return this.status !== 'completed' && this.status !== 'cancelled' && this.endDate < new Date();
+  // For text statuses, check if completed/cancelled. For Zoho user IDs, check by date only
+  const textStatus = this.status?.toLowerCase();
+  const isCompleted = textStatus === 'completed' || textStatus === 'cancelled';
+  return !isCompleted && this.endDate < new Date();
 });
 
 // Instance method to assign user

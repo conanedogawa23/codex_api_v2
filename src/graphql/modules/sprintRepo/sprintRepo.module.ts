@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { SprintRepo } from '../../../models/SprintRepo';
+import { Sprint } from '../../../models/Sprint';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
@@ -24,6 +25,7 @@ export const sprintRepoModule = createModule({
       startDate: DateTime
       endDate: DateTime
       duration: Int
+      sprintCount: Int!
       isActive: Boolean!
       createdAt: DateTime!
       updatedAt: DateTime!
@@ -97,6 +99,18 @@ export const sprintRepoModule = createModule({
         const start = new Date(parent.startDate).getTime();
         const end = new Date(parent.endDate).getTime();
         return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      },
+      sprintCount: async (parent: any) => {
+        try {
+          const count = await Sprint.countDocuments({ 
+            sprintRepoId: parent._id?.toString() || parent.id, 
+            isActive: true 
+          });
+          return count;
+        } catch (error) {
+          logger.error('Error counting sprints for sprint repo', { sprintRepoId: parent._id || parent.id, error });
+          return 0;
+        }
       }
     },
 
