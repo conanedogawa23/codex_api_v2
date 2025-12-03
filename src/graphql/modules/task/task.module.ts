@@ -1,9 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
+import mongoose from 'mongoose';
 import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
-import mongoose from 'mongoose';
 
 export const taskModule = createModule({
   id: 'task',
@@ -399,16 +399,22 @@ export const taskModule = createModule({
           .sort({ priority: -1, dueDate: 1 })
           .lean();
 
-        // Get total count
+        // Get total count for current filter
         const totalCount = await Task.countDocuments(query);
 
-        // Calculate status summary
-        const allTasks = await Task.find(query).select('status').lean();
+        // Calculate status summary from ALL active tasks (not filtered)
+        // This is used for tab counts and should always show total counts
+        const baseQuery: any = { isActive: true };
+        // Apply non-status filters for status summary (project, assignee, etc.)
+        if (filter.projectId) baseQuery.projectId = filter.projectId;
+        if (filter.assignedTo) baseQuery['assignedTo.id'] = filter.assignedTo;
+        
+        const allActiveTasks = await Task.find(baseQuery).select('status').lean();
         const statusSummary = {
-          total: allTasks.length,
-          completed: allTasks.filter((t: any) => t.status === 'completed').length,
-          inProgress: allTasks.filter((t: any) => t.status === 'in-progress').length,
-          pending: allTasks.filter((t: any) => t.status === 'pending').length,
+          total: allActiveTasks.length,
+          completed: allActiveTasks.filter((t: any) => t.status === 'completed').length,
+          inProgress: allActiveTasks.filter((t: any) => t.status === 'in-progress').length,
+          pending: allActiveTasks.filter((t: any) => t.status === 'pending').length,
         };
 
         return {
@@ -420,6 +426,7 @@ export const taskModule = createModule({
 
       tasksBySprint: async (_: any, { sprintId, limit = 100 }: { sprintId: string; limit: number }) => {
         try {
+<<<<<<< HEAD
           // Handle both ObjectId and string types for sprintId
           const sprintObjectId = mongoose.Types.ObjectId.isValid(sprintId) 
             ? new mongoose.Types.ObjectId(sprintId) 
@@ -432,9 +439,41 @@ export const taskModule = createModule({
             ],
             isActive: true
           })
+=======
+          // Use raw MongoDB collection to bypass Mongoose schema casting
+          // (sprintId is defined as String in schema but stored as both String and ObjectId in DB)
+          const db = mongoose.connection.db;
+          const tasksCollection = db.collection('tasks');
+          
+          const filter: any = { 
+            $or: [
+              { sprintId: sprintId },  // String match
+              { sprintId: new mongoose.Types.ObjectId(sprintId) }  // ObjectId match
+            ],
+            isActive: true 
+          };
+
+          const results = await tasksCollection
+            .find(filter)
+>>>>>>> 4738921 (feat: Refactor board, sprint, and task modules for improved MongoDB integration and data handling)
             .sort({ sprintOrder: 1, createdAt: 1 })
             .limit(limit)
-            .lean();
+            .toArray();
+          
+          // Convert ObjectId fields to strings for GraphQL compatibility
+          return results.map((task: any) => ({
+            ...task,
+            _id: task._id.toString(),
+            sprintId: task.sprintId?.toString ? task.sprintId.toString() : task.sprintId,
+            assignedTo: task.assignedTo ? {
+              ...task.assignedTo,
+              id: task.assignedTo.id?.toString ? task.assignedTo.id.toString() : task.assignedTo.id
+            } : null,
+            assignedBy: task.assignedBy ? {
+              ...task.assignedBy,
+              id: task.assignedBy.id?.toString ? task.assignedBy.id.toString() : task.assignedBy.id
+            } : null
+          }));
         } catch (error) {
           logger.error('Error fetching tasks by sprint', { sprintId, error });
           throw new AppError('Failed to fetch sprint tasks', 500);
