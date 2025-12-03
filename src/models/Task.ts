@@ -48,6 +48,25 @@ export interface ITask extends Document {
   createdAt: Date;
   updatedAt: Date;
   
+  // Zoho Sprints specific fields
+  zohoItemId?: string;
+  zohoItemNumber?: string;
+  zohoProjectId?: string;
+  zohoSprintId?: string;
+  zohoItemTypeId?: string;
+  zohoItemTypeName?: string;
+  zohoItemTypeColor?: string;
+  zohoPriorityId?: string;
+  zohoPriorityName?: string;
+  zohoPriorityColor?: string;
+  zohoStatusId?: string;
+  zohoStatusName?: string;
+  zohoStatusType?: number;
+  zohoStatusColor?: string;
+  zohoEpicId?: string;
+  source?: string; // 'gitlab' or 'zoho_sprints'
+  duration?: string; // Duration string (e.g., "8h", "5d 12h")
+  
   // Instance methods
   updateProgress(percentage: number): Promise<ITask>;
   updateSyncTimestamp(): Promise<ITask>;
@@ -182,6 +201,65 @@ const TaskSchema: Schema = new Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  zohoItemId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+  zohoItemNumber: {
+    type: String,
+    sparse: true
+  },
+  zohoProjectId: {
+    type: String,
+    index: true
+  },
+  zohoSprintId: {
+    type: String,
+    index: true
+  },
+  zohoItemTypeId: {
+    type: String
+  },
+  zohoItemTypeName: {
+    type: String
+  },
+  zohoItemTypeColor: {
+    type: String
+  },
+  zohoPriorityId: {
+    type: String
+  },
+  zohoPriorityName: {
+    type: String
+  },
+  zohoPriorityColor: {
+    type: String
+  },
+  zohoStatusId: {
+    type: String
+  },
+  zohoStatusName: {
+    type: String
+  },
+  zohoStatusType: {
+    type: Number
+  },
+  zohoStatusColor: {
+    type: String
+  },
+  zohoEpicId: {
+    type: String
+  },
+  source: {
+    type: String,
+    enum: ['gitlab', 'zoho_sprints', 'manual'],
+    index: true
+  },
+  duration: {
+    type: String
   }
 }, {
   timestamps: true,
@@ -197,6 +275,8 @@ TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ lastSynced: 1 });
 TaskSchema.index({ sprintId: 1, sprintOrder: 1 });
 TaskSchema.index({ projectId: 1, sprintId: 1 });
+TaskSchema.index({ source: 1, projectId: 1 });
+TaskSchema.index({ zohoProjectId: 1, zohoSprintId: 1 });
 
 // Virtual for overdue status
 TaskSchema.virtual('isOverdue').get(function() {

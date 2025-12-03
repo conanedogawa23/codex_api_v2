@@ -50,6 +50,24 @@ export const taskModule = createModule({
       updatedAt: DateTime!
       completedAt: DateTime
       isActive: Boolean!
+      zohoItemId: String
+      zohoItemNumber: String
+      zohoProjectId: String
+      zohoSprintId: String
+      zohoItemTypeId: String
+      zohoItemTypeName: String
+      zohoItemTypeColor: String
+      zohoPriorityId: String
+      zohoPriorityName: String
+      zohoPriorityColor: String
+      zohoStatusId: String
+      zohoStatusName: String
+      zohoStatusType: Int
+      zohoStatusColor: String
+      zohoEpicId: String
+      source: String
+      duration: String
+      points: Float
     }
     
     """
@@ -84,6 +102,24 @@ export const taskModule = createModule({
       updatedAt: DateTime!
       completedAt: DateTime
       isActive: Boolean!
+      zohoItemId: String
+      zohoItemNumber: String
+      zohoProjectId: String
+      zohoSprintId: String
+      zohoItemTypeId: String
+      zohoItemTypeName: String
+      zohoItemTypeColor: String
+      zohoPriorityId: String
+      zohoPriorityName: String
+      zohoPriorityColor: String
+      zohoStatusId: String
+      zohoStatusName: String
+      zohoStatusType: Int
+      zohoStatusColor: String
+      zohoEpicId: String
+      source: String
+      duration: String
+      points: Float
     }
 
     enum TaskStatus {
@@ -231,6 +267,10 @@ export const taskModule = createModule({
         const diffTime = new Date(parent.dueDate).getTime() - now.getTime();
         return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       },
+      points: (parent: any) => {
+        // Return storyPoints value for both GitLab and Zoho tasks
+        return parent.storyPoints || null;
+      },
     },
     
     // TaskDetails resolver (alias for Task)
@@ -268,6 +308,10 @@ export const taskModule = createModule({
         const now = new Date();
         const diffTime = new Date(parent.dueDate).getTime() - now.getTime();
         return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      },
+      points: (parent: any) => {
+        // Return storyPoints value for both GitLab and Zoho tasks
+        return parent.storyPoints || null;
       },
     },
     

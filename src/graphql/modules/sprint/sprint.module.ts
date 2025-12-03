@@ -13,12 +13,12 @@ export const sprintModule = createModule({
       id: ID!
       name: String!
       description: String
-      sprintRepoId: String!
+      sprintRepoId: String
       sprintRepo: SprintRepo
       assignees: [SprintAssignee!]!
       progress: SprintProgress!
-      startDate: DateTime!
-      endDate: DateTime!
+      startDate: DateTime
+      endDate: DateTime
       goal: String
       status: SprintStatus!
       statusUserName: String
@@ -30,7 +30,7 @@ export const sprintModule = createModule({
       source: String
       velocity: Float
       capacity: Float
-      duration: Int!
+      duration: Int
       isOverdue: Boolean!
       taskCount: Int!
       createdAt: DateTime!
@@ -137,11 +137,13 @@ export const sprintModule = createModule({
         return parent.status?.toUpperCase();
       },
       duration: (parent: any) => {
+        if (!parent.startDate || !parent.endDate) return null;
         const start = new Date(parent.startDate).getTime();
         const end = new Date(parent.endDate).getTime();
         return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
       },
       isOverdue: (parent: any) => {
+        if (!parent.endDate) return false;
         const status = parent.status?.toLowerCase();
         return status !== 'completed' && status !== 'cancelled' && new Date(parent.endDate) < new Date();
       },
