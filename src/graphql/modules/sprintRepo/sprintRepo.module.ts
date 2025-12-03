@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { SprintRepo } from '../../../models/SprintRepo';
+import { Sprint } from '../../../models/Sprint';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import mongoose from 'mongoose';
 
 export const sprintRepoModule = createModule({
   id: 'sprintRepo',
@@ -19,6 +21,7 @@ export const sprintRepoModule = createModule({
       startDate: DateTime
       endDate: DateTime
       duration: Int
+      sprintCount: Int!
       isActive: Boolean!
       createdAt: DateTime!
       updatedAt: DateTime!
@@ -81,6 +84,26 @@ export const sprintRepoModule = createModule({
         const start = new Date(parent.startDate).getTime();
         const end = new Date(parent.endDate).getTime();
         return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      },
+      sprintCount: async (parent: any) => {
+        try {
+          const sprintRepoId = parent._id || parent.id;
+          const sprintRepoIdStr = sprintRepoId?.toString();
+          
+          // Query for sprints with sprintRepoId as either ObjectId or string
+          const count = await Sprint.countDocuments({
+            $or: [
+              { sprintRepoId: sprintRepoId },
+              { sprintRepoId: sprintRepoIdStr },
+              { sprintRepoId: mongoose.Types.ObjectId.isValid(sprintRepoIdStr) ? new mongoose.Types.ObjectId(sprintRepoIdStr) : null }
+            ],
+            isActive: true
+          });
+          return count;
+        } catch (error) {
+          logger.error('Error counting sprints for sprint repo', { sprintRepoId: parent._id || parent.id, error });
+          return 0;
+        }
       }
     },
 

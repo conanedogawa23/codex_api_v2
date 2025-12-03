@@ -3,6 +3,7 @@ import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import mongoose from 'mongoose';
 
 export const taskModule = createModule({
   id: 'task',
@@ -375,7 +376,18 @@ export const taskModule = createModule({
 
       tasksBySprint: async (_: any, { sprintId, limit = 100 }: { sprintId: string; limit: number }) => {
         try {
-          return await Task.find({ sprintId, isActive: true })
+          // Handle both ObjectId and string types for sprintId
+          const sprintObjectId = mongoose.Types.ObjectId.isValid(sprintId) 
+            ? new mongoose.Types.ObjectId(sprintId) 
+            : null;
+          
+          return await Task.find({
+            $or: [
+              { sprintId: sprintId },
+              { sprintId: sprintObjectId }
+            ],
+            isActive: true
+          })
             .sort({ sprintOrder: 1, createdAt: 1 })
             .limit(limit)
             .lean();

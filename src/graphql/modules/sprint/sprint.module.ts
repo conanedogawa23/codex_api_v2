@@ -4,6 +4,7 @@ import { SprintRepo } from '../../../models/SprintRepo';
 import { Task } from '../../../models/Task';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import mongoose from 'mongoose';
 
 export const sprintModule = createModule({
   id: 'sprint',
@@ -16,13 +17,17 @@ export const sprintModule = createModule({
       sprintRepo: SprintRepo
       assignees: [SprintAssignee!]!
       progress: SprintProgress!
-      startDate: DateTime!
-      endDate: DateTime!
+      startDate: DateTime
+      endDate: DateTime
       goal: String
       status: SprintStatus!
+      statusName: String!
+      statusType: String!
+      statusUserName: String
+      projectName: String
       velocity: Float
       capacity: Float
-      duration: Int!
+      duration: Int
       isOverdue: Boolean!
       taskCount: Int!
       createdAt: DateTime!
@@ -115,20 +120,96 @@ export const sprintModule = createModule({
         return parent.progress || { totalTasks: 0, completedTasks: 0, percentage: 0 };
       },
       status: (parent: any) => {
-        return parent.status?.toUpperCase();
+        // Handle Zoho-imported sprints that use statusType
+        if (parent.statusType !== undefined) {
+          const statusTypeMap: Record<number, string> = {
+            1: 'PLANNED',    // Upcoming
+            2: 'ACTIVE',     // Active
+            3: 'COMPLETED',  // Completed
+            4: 'CANCELLED'   // Cancelled (if exists)
+          };
+          return statusTypeMap[parent.statusType] || 'PLANNED';
+        }
+        
+        // Handle manually created sprints with enum status
+        const status = parent.status?.toLowerCase();
+        const validStatuses = ['planned', 'active', 'completed', 'cancelled'];
+        if (status && validStatuses.includes(status)) {
+          return status.toUpperCase();
+        }
+        
+        // Default fallback
+        return 'PLANNED';
+      },
+      statusName: (parent: any) => {
+        // Use existing statusName from Zoho imports if available
+        if (parent.statusName) {
+          return parent.statusName;
+        }
+        
+        // Generate from status for manually created sprints
+        const status = parent.status?.toLowerCase();
+        const statusMap: Record<string, string> = {
+          'planned': 'Planned',
+          'active': 'Active',
+          'completed': 'Completed',
+          'cancelled': 'Cancelled'
+        };
+        return statusMap[status] || 'Planned';
+      },
+      statusType: (parent: any) => {
+        // Use existing statusType from Zoho imports if available
+        if (parent.statusType !== undefined) {
+          return parent.statusType.toString();
+        }
+        
+        // Generate from status for manually created sprints
+        const status = parent.status?.toLowerCase();
+        const typeMap: Record<string, string> = {
+          'planned': '1',
+          'active': '2',
+          'completed': '3',
+          'cancelled': '4'
+        };
+        return typeMap[status] || '1';
+      },
+      statusUserName: (parent: any) => {
+        // Return existing statusUserName from database (for Zoho imports)
+        return parent.statusUserName || null;
+      },
+      projectName: (parent: any) => {
+        // Return existing projectName from database (for Zoho imports)
+        if (parent.projectName) {
+          return parent.projectName;
+        }
+        // For manually created sprints, this will be resolved via sprintRepo if needed
+        return null;
       },
       duration: (parent: any) => {
+        if (!parent.startDate || !parent.endDate) return null;
         const start = new Date(parent.startDate).getTime();
         const end = new Date(parent.endDate).getTime();
         return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
       },
       isOverdue: (parent: any) => {
+        if (!parent.endDate) return false;
         const status = parent.status?.toLowerCase();
         return status !== 'completed' && status !== 'cancelled' && new Date(parent.endDate) < new Date();
       },
       taskCount: async (parent: any) => {
         try {
-          const count = await Task.countDocuments({ sprintId: parent._id || parent.id, isActive: true });
+          const sprintId = parent._id || parent.id;
+          const sprintIdStr = sprintId?.toString();
+          
+          // Query for tasks with sprintId as either ObjectId or string
+          const count = await Task.countDocuments({
+            $or: [
+              { sprintId: sprintId },
+              { sprintId: sprintIdStr },
+              { sprintId: mongoose.Types.ObjectId.isValid(sprintIdStr) ? new mongoose.Types.ObjectId(sprintIdStr) : null }
+            ],
+            isActive: true
+          });
           return count;
         } catch (error) {
           logger.error('Error counting tasks for sprint', { sprintId: parent._id || parent.id, error });

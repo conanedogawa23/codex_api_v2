@@ -44,7 +44,7 @@ const SprintSchema: Schema = new Schema({
     trim: true
   },
   sprintRepoId: {
-    type: String,
+    type: Schema.Types.ObjectId,
     required: true,
     index: true,
     ref: 'SprintRepo'

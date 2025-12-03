@@ -92,7 +92,7 @@ const TaskSchema: Schema = new Schema({
     ref: 'Project'
   },
   sprintId: {
-    type: String,
+    type: Schema.Types.ObjectId,
     index: true,
     ref: 'Sprint'
   },
