@@ -402,19 +402,47 @@ export const taskModule = createModule({
         // Get total count for current filter
         const totalCount = await Task.countDocuments(query);
 
-        // Calculate status summary from ALL active tasks (not filtered)
-        // This is used for tab counts and should always show total counts
+        // Calculate status summary efficiently using aggregation
+        // Build base query for status summary (exclude status filter to get all counts)
         const baseQuery: any = { isActive: true };
         // Apply non-status filters for status summary (project, assignee, etc.)
         if (filter.projectId) baseQuery.projectId = filter.projectId;
         if (filter.assignedTo) baseQuery['assignedTo.id'] = filter.assignedTo;
+        if (filter.sprintId !== undefined) {
+          if (filter.sprintId === null || filter.sprintId === '') {
+            baseQuery.sprintId = { $exists: false };
+          } else {
+            baseQuery.sprintId = filter.sprintId;
+          }
+        }
+        if (filter.dueDateFrom || filter.dueDateTo) {
+          baseQuery.dueDate = {};
+          if (filter.dueDateFrom) baseQuery.dueDate.$gte = new Date(filter.dueDateFrom);
+          if (filter.dueDateTo) baseQuery.dueDate.$lte = new Date(filter.dueDateTo);
+        }
         
-        const allActiveTasks = await Task.find(baseQuery).select('status').lean();
+        // Use MongoDB aggregation for efficient counting by status
+        const statusCounts = await Task.aggregate([
+          { $match: baseQuery },
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 }
+            }
+          }
+        ]);
+
+        // Build status summary from aggregation results
+        const statusMap = statusCounts.reduce((acc: any, curr: any) => {
+          acc[curr._id] = curr.count;
+          return acc;
+        }, {});
+
         const statusSummary = {
-          total: allActiveTasks.length,
-          completed: allActiveTasks.filter((t: any) => t.status === 'completed').length,
-          inProgress: allActiveTasks.filter((t: any) => t.status === 'in-progress').length,
-          pending: allActiveTasks.filter((t: any) => t.status === 'pending').length,
+          total: Object.values(statusMap).reduce((sum: number, count: any) => sum + count, 0) as number,
+          completed: statusMap['completed'] || 0,
+          inProgress: statusMap['in-progress'] || 0,
+          pending: statusMap['pending'] || 0,
         };
 
         return {
