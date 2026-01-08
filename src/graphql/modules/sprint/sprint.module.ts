@@ -105,6 +105,7 @@ export const sprintModule = createModule({
   resolvers: {
     Sprint: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString ? parent.sprintRepoId.toString() : parent.sprintRepoId,
       sprintRepo: async (parent: any) => {
         try {
           const sprintRepo = await SprintRepo.findById(parent.sprintRepoId).lean();

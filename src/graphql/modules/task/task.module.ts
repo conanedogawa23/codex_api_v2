@@ -245,7 +245,8 @@ export const taskModule = createModule({
         // DB: 'high' -> GraphQL: 'HIGH'
         return parent.priority?.toUpperCase();
       },
-      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString() || null,
+      sprintId: (parent: any) => parent.sprintId?.toString ? parent.sprintId.toString() : parent.sprintId,
+      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString ? parent.sprintRepoId.toString() : parent.sprintRepoId,
       assignedTo: (parent: any) => {
         // Return null if assignedTo is missing or doesn't have required fields
         if (!parent.assignedTo || !parent.assignedTo.id) return null;
@@ -290,7 +291,8 @@ export const taskModule = createModule({
       priority: (parent: any) => {
         return parent.priority?.toUpperCase();
       },
-      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString() || null,
+      sprintId: (parent: any) => parent.sprintId?.toString ? parent.sprintId.toString() : parent.sprintId,
+      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString ? parent.sprintRepoId.toString() : parent.sprintRepoId,
       assignedTo: (parent: any) => {
         // Return null if assignedTo is missing or doesn't have required fields
         if (!parent.assignedTo || !parent.assignedTo.id) return null;
