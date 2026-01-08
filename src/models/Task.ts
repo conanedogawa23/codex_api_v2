@@ -16,6 +16,7 @@ export interface ITask extends Document {
   priority: 'low' | 'medium' | 'high' | 'urgent';
   projectId: string; // REQUIRED: All tasks must be associated with a project
   sprintId?: string; // Optional: Sprint assignment (null for backlog tasks)
+  sprintRepoId?: string; // Optional: SprintRepo for backlog filtering
   storyPoints?: number; // Optional: Story points for sprint planning
   sprintOrder?: number; // Optional: Order within sprint
   assignedTo?: {
@@ -114,6 +115,11 @@ const TaskSchema: Schema = new Schema({
     type: Schema.Types.ObjectId,
     index: true,
     ref: 'Sprint'
+  },
+  sprintRepoId: {
+    type: Schema.Types.ObjectId,
+    index: true,
+    ref: 'SprintRepo'
   },
   storyPoints: {
     type: Number,
@@ -275,6 +281,8 @@ TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ lastSynced: 1 });
 TaskSchema.index({ sprintId: 1, sprintOrder: 1 });
 TaskSchema.index({ projectId: 1, sprintId: 1 });
+TaskSchema.index({ projectId: 1, sprintRepoId: 1 });
+TaskSchema.index({ sprintRepoId: 1, sprintId: 1 });
 TaskSchema.index({ source: 1, projectId: 1 });
 TaskSchema.index({ zohoProjectId: 1, zohoSprintId: 1 });
 

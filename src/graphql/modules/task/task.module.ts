@@ -31,6 +31,7 @@ export const taskModule = createModule({
       priority: TaskPriority!
       projectId: String!
       sprintId: String
+      sprintRepoId: String
       storyPoints: Float
       sprintOrder: Int
       assignedTo: TaskAssignee
@@ -83,6 +84,7 @@ export const taskModule = createModule({
       priority: TaskPriority!
       projectId: String!
       sprintId: String
+      sprintRepoId: String
       storyPoints: Float
       sprintOrder: Int
       assignedTo: TaskAssignee
@@ -168,6 +170,7 @@ export const taskModule = createModule({
       priority: TaskPriority
       projectId: String!
       sprintId: String
+      sprintRepoId: String
       storyPoints: Float
       assignedTo: String
       dueDate: DateTime
@@ -179,7 +182,9 @@ export const taskModule = createModule({
       description: String
       status: TaskStatus
       priority: TaskPriority
+      projectId: String
       sprintId: String
+      sprintRepoId: String
       storyPoints: Float
       sprintOrder: Int
       assignedTo: String
@@ -211,6 +216,7 @@ export const taskModule = createModule({
       tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20): [TaskDetails!]!
       tasksBySprint(sprintId: ID!, limit: Int = 100): [Task!]!
       backlogTasks(projectId: ID!, limit: Int = 100): [Task!]!
+      backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100): [Task!]!
     }
 
     extend type Mutation {
@@ -239,6 +245,7 @@ export const taskModule = createModule({
         // DB: 'high' -> GraphQL: 'HIGH'
         return parent.priority?.toUpperCase();
       },
+      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString() || null,
       assignedTo: (parent: any) => {
         // Return null if assignedTo is missing or doesn't have required fields
         if (!parent.assignedTo || !parent.assignedTo.id) return null;
@@ -283,6 +290,7 @@ export const taskModule = createModule({
       priority: (parent: any) => {
         return parent.priority?.toUpperCase();
       },
+      sprintRepoId: (parent: any) => parent.sprintRepoId?.toString() || null,
       assignedTo: (parent: any) => {
         // Return null if assignedTo is missing or doesn't have required fields
         if (!parent.assignedTo || !parent.assignedTo.id) return null;
@@ -491,6 +499,36 @@ export const taskModule = createModule({
         } catch (error) {
           logger.error('Error fetching backlog tasks', { projectId, error });
           throw new AppError('Failed to fetch backlog tasks', 500);
+        }
+      },
+
+      backlogTasksBySprintRepo: async (
+        _: any,
+        { projectId, sprintRepoId, limit = 100 }: { projectId: string; sprintRepoId: string; limit: number }
+      ) => {
+        try {
+          if (!mongoose.Types.ObjectId.isValid(projectId)) {
+            throw new AppError('Invalid project ID', 400);
+          }
+          if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
+            throw new AppError('Invalid sprintRepo ID', 400);
+          }
+
+          return await Task.find({
+            projectId,
+            sprintRepoId,
+            isActive: true,
+            $or: [
+              { sprintId: { $exists: false } },
+              { sprintId: null }
+            ]
+          })
+            .sort({ priority: -1, createdAt: 1 })
+            .limit(limit)
+            .lean();
+        } catch (error) {
+          logger.error('Error fetching backlog tasks by sprint repo', { projectId, sprintRepoId, error });
+          throw new AppError('Failed to fetch backlog tasks by sprint repo', 500);
         }
       },
     },

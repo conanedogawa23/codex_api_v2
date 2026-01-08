@@ -15,6 +15,7 @@ import { taskModule } from './modules/task/task.module';
 import { taskCommentModule } from './modules/taskComment/taskComment.module';
 import { sprintModule } from './modules/sprint/sprint.module';
 import { sprintRepoModule } from './modules/sprintRepo/sprintRepo.module';
+import { projectSprintRepoMappingModule } from './modules/projectSprintRepoMapping/projectSprintRepoMapping.module';
 import { boardModule } from './modules/board/board.module';
 import { commitModule } from './modules/commit/commit.module';
 import { discussionModule } from './modules/discussion/discussion.module';
@@ -45,6 +46,7 @@ export const application = createApplication({
     taskCommentModule,
     sprintModule,
     sprintRepoModule,
+    projectSprintRepoMappingModule,
     boardModule,
     commitModule,
     discussionModule,
