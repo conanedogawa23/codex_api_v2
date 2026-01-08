@@ -37,7 +37,6 @@ export const GITLAB_PROJECT_QUERIES = {
           starCount
           forksCount
           avatarUrl
-          emptyRepo
           publicJobs
           onlyAllowMergeIfPipelineSucceeds
           onlyAllowMergeIfAllDiscussionsAreResolved
@@ -56,11 +55,8 @@ export const GITLAB_PROJECT_QUERIES = {
           containerRegistryEnabled
           serviceDeskEnabled
           serviceDeskAddress
-          autoDevopsEnabled
-          autoDevopsDeployStrategy
           autocloseReferencedIssues
           suggestionCommitMessage
-          squashOption
           namespace {
             id
             name
@@ -197,7 +193,6 @@ export const GITLAB_PROJECT_QUERIES = {
       projects(ids: $ids) {
         nodes {
           id
-          ciConfigPath
           ciCdSettings {
             mergePipelinesEnabled
             mergeTrainsEnabled
@@ -213,7 +208,6 @@ export const GITLAB_PROJECT_QUERIES = {
               paused
               runnerType
               tagList
-              version
               accessLevel
             }
           }
@@ -252,7 +246,6 @@ export const GITLAB_PROJECT_QUERIES = {
               expirationPolicyStartedAt
               status
             }
-            count
           }
         }
       }
@@ -327,22 +320,6 @@ export const GITLAB_PROJECT_QUERIES = {
           squashCommitTemplate
           removeSourceBranchAfterMerge
           printingMergeRequestLinkEnabled
-          squashOption
-          approvalRules {
-            nodes {
-              id
-              name
-              type
-              approvalsRequired
-              eligibleApprovers {
-                nodes {
-                  id
-                  username
-                  name
-                }
-              }
-            }
-          }
         }
       }
     }

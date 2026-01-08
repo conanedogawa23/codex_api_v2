@@ -15,65 +15,56 @@
 export const GITLAB_MERGE_REQUEST_QUERIES = {
   /**
    * Core MR Data Query
-   * Fetches essential merge request information
+   * Fetches essential merge request information for a single MR
    */
   CORE_DATA: `
-    query GetMergeRequestCoreData($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
+    query GetMergeRequestCoreData($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        iid
+        title
+        titleHtml
+        description
+        descriptionHtml
+        state
+        mergedAt
+        createdAt
+        updatedAt
+        targetBranch
+        sourceBranch
+        upvotes
+        downvotes
+        userNotesCount
+        draft
+        mergeWhenPipelineSucceeds
+        shouldRemoveSourceBranch
+        forceRemoveSourceBranch
+        squash
+        squashOnMerge
+        rebaseInProgress
+        mergeError
+        mergeStatus
+        detailedMergeStatus
+        webUrl
+        reference
+        divergedFromTargetBranch
+        mergeable
+        mergeableDiscussionsState
+        userDiscussionsCount
+        project {
           id
-          iid
+          name
+          fullPath
+        }
+        milestone {
+          id
           title
-          titleHtml
-          description
-          descriptionHtml
-          state
-          mergedAt
-          createdAt
-          updatedAt
-          targetBranch
-          sourceBranch
-          upvotes
-          downvotes
-          userNotesCount
-          draft
-          workInProgress
-          mergeWhenPipelineSucceeds
-          shouldRemoveSourceBranch
-          forceRemoveSourceBranch
-          squash
-          squashOnMerge
-          rebaseInProgress
-          mergeError
-          mergeStatus
-          detailedMergeStatus
-          webUrl
-          reference
-          references {
-            full
-            short
-          }
-          hasConflicts
-          conflictResolutionStatus
-          divergedFromTargetBranch
-          mergeable
-          mergeableDiscussionsState
-          userDiscussionsCount
-          project {
-            id
-            name
-            fullPath
-          }
-          milestone {
+        }
+        labels {
+          nodes {
             id
             title
-          }
-          labels {
-            nodes {
-              id
-              title
-              color
-            }
+            color
           }
         }
       }
@@ -85,11 +76,19 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches people involved with the MR
    */
   REVIEWERS_ASSIGNEES: `
-    query GetMergeRequestReviewersAssignees($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
+    query GetMergeRequestReviewersAssignees($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        author {
           id
-          author {
+          username
+          name
+          avatarUrl
+          webUrl
+          state
+        }
+        assignees {
+          nodes {
             id
             username
             name
@@ -97,32 +96,22 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
             webUrl
             state
           }
-          assignees {
-            nodes {
-              id
-              username
-              name
-              avatarUrl
-              webUrl
-              state
-            }
-          }
-          reviewers {
-            nodes {
-              id
-              username
-              name
-              avatarUrl
-              webUrl
-              state
-            }
-          }
-          mergedBy {
+        }
+        reviewers {
+          nodes {
             id
             username
             name
             avatarUrl
+            webUrl
+            state
           }
+        }
+        mergedBy {
+          id
+          username
+          name
+          avatarUrl
         }
       }
     }
@@ -133,47 +122,20 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches approval status and rules
    */
   APPROVALS: `
-    query GetMergeRequestApprovals($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
-          id
-          approved
-          approvedBy {
-            nodes {
-              id
-              username
-              name
-              avatarUrl
-            }
-          }
-          approvalsLeft
-          approvalsRequired
-          approvalState {
-            rules {
-              nodes {
-                id
-                name
-                type
-                approvalsRequired
-                approved
-                eligibleApprovers {
-                  nodes {
-                    id
-                    username
-                    name
-                  }
-                }
-                approvedBy {
-                  nodes {
-                    id
-                    username
-                    name
-                  }
-                }
-              }
-            }
+    query GetMergeRequestApprovals($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        approved
+        approvedBy {
+          nodes {
+            id
+            username
+            name
+            avatarUrl
           }
         }
+        approvalsLeft
+        approvalsRequired
       }
     }
   `,
@@ -183,43 +145,41 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches associated CI/CD pipelines
    */
   PIPELINES: `
-    query GetMergeRequestPipelines($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
+    query GetMergeRequestPipelines($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        headPipeline {
           id
-          headPipeline {
+          iid
+          status
+          detailedStatus {
+            text
+            label
+            icon
+          }
+          createdAt
+          updatedAt
+          startedAt
+          finishedAt
+          duration
+          queuedDuration
+          coverage
+          ref
+          sha
+          beforeSha
+          webPath
+        }
+        pipelines {
+          nodes {
             id
             iid
             status
-            detailedStatus {
-              text
-              label
-              icon
-            }
-            createdAt
-            updatedAt
-            startedAt
-            finishedAt
-            duration
-            queuedDuration
-            coverage
             ref
             sha
-            beforeSha
-            webPath
+            createdAt
+            updatedAt
           }
-          pipelines {
-            nodes {
-              id
-              iid
-              status
-              ref
-              sha
-              createdAt
-              updatedAt
-            }
-            count
-          }
+          count
         }
       }
     }
@@ -230,21 +190,19 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches changes statistics
    */
   DIFF_STATS: `
-    query GetMergeRequestDiffStats($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
-          id
-          diffStats {
-            additions
-            deletions
-            fileCount
-          }
-          diffStatsSummary {
-            additions
-            deletions
-            changes
-            fileCount
-          }
+    query GetMergeRequestDiffStats($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        diffStats {
+          additions
+          deletions
+          fileCount
+        }
+        diffStatsSummary {
+          additions
+          deletions
+          changes
+          fileCount
         }
       }
     }
@@ -255,42 +213,40 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches conversation threads
    */
   DISCUSSIONS: `
-    query GetMergeRequestDiscussions($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
-          id
-          discussions {
-            nodes {
+    query GetMergeRequestDiscussions($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        discussions {
+          nodes {
+            id
+            createdAt
+            resolved
+            resolvable
+            resolvedAt
+            resolvedBy {
               id
-              createdAt
-              resolved
-              resolvable
-              resolvedAt
-              resolvedBy {
+              username
+              name
+            }
+            notes {
+              nodes {
                 id
-                username
-                name
-              }
-              notes {
-                nodes {
+                body
+                bodyHtml
+                createdAt
+                updatedAt
+                system
+                author {
                   id
-                  body
-                  bodyHtml
-                  createdAt
-                  updatedAt
-                  system
-                  author {
-                    id
-                    username
-                    name
-                  }
+                  username
+                  name
                 }
               }
             }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
       }
@@ -302,37 +258,35 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches commits in the MR
    */
   COMMITS: `
-    query GetMergeRequestCommits($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
-          id
-          commits {
-            nodes {
+    query GetMergeRequestCommits($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        commits {
+          nodes {
+            id
+            sha
+            shortId
+            title
+            message
+            authoredDate
+            committedDate
+            webUrl
+            author {
               id
-              sha
-              shortId
-              title
-              message
-              authoredDate
-              committedDate
-              webUrl
-              author {
-                id
-                username
-                name
-                avatarUrl
-              }
-              committer {
-                id
-                username
-                name
-                avatarUrl
-              }
+              username
+              name
+              avatarUrl
             }
-            count
+            committer {
+              id
+              username
+              name
+              avatarUrl
+            }
           }
-          commitCount
+          count
         }
+        commitCount
       }
     }
   `,
@@ -342,34 +296,39 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
    * Fetches file changes (diffs)
    */
   CHANGES: `
-    query GetMergeRequestChanges($ids: [ID!]!) {
-      mergeRequests(ids: $ids) {
-        nodes {
-          id
-          diffRefs {
-            baseSha
-            headSha
-            startSha
-          }
-          diffHeadSha
+    query GetMergeRequestChanges($id: MergeRequestID!) {
+      mergeRequest(id: $id) {
+        id
+        diffRefs {
+          baseSha
+          headSha
+          startSha
         }
+        diffHeadSha
       }
     }
   `,
 
   /**
    * Simple MR List Query
-   * Used for fetching MR IDs for batch processing
+   * Used for fetching MR IDs for batch processing for a specific project
    */
   SIMPLE_LIST: `
-    query GetSimpleMergeRequestList($first: Int!, $after: String, $projectPath: ID) {
+    query GetSimpleMergeRequestList($first: Int!, $after: String, $projectPath: ID!) {
       project(fullPath: $projectPath) {
-        mergeRequests(first: $first, after: $after) {
+        id
+        fullPath
+        mergeRequests(first: $first, after: $after, sort: UPDATED_DESC) {
           nodes {
             id
             iid
             title
             state
+            updatedAt
+            project {
+              id
+              fullPath
+            }
           }
           pageInfo {
             hasNextPage
@@ -383,15 +342,19 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
   /**
    * Simple MR List Query (All MRs)
    * For fetching MRs across all projects
+   * Note: This query may not be supported on all GitLab instances
    */
   SIMPLE_LIST_ALL: `
     query GetAllSimpleMergeRequests($first: Int!, $after: String) {
-      mergeRequests(first: $first, after: $after) {
+      mergeRequests(first: $first, after: $after, sort: UPDATED_DESC) {
         nodes {
           id
           iid
           title
           state
+          updatedAt
+          sourceBranch
+          targetBranch
           project {
             id
             fullPath
@@ -400,6 +363,34 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
         pageInfo {
           hasNextPage
           endCursor
+        }
+      }
+    }
+  `,
+
+  /**
+   * Simple MR List by Projects Query
+   * For fetching MRs from multiple specific projects
+   */
+  SIMPLE_LIST_BY_PROJECTS: `
+    query GetMergeRequestsByProjects($projectPath: ID!, $first: Int!, $after: String) {
+      project(fullPath: $projectPath) {
+        id
+        fullPath
+        mergeRequests(first: $first, after: $after, sort: UPDATED_DESC) {
+          nodes {
+            id
+            iid
+            title
+            state
+            updatedAt
+            sourceBranch
+            targetBranch
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }

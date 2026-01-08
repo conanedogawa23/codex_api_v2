@@ -1,20 +1,22 @@
 /**
  * GitLab Event GraphQL Queries
- * 1 category: CORE_DATA (simple entity)
+ * Events are project-level and use project context
  */
 
 export const GITLAB_EVENT_QUERIES = {
   CORE_DATA: `
-    query GetEventCoreData($ids: [ID!]!) {
-      events(ids: $ids) {
-        nodes {
-          id
-          action
-          createdAt
-          author {
+    query GetEventCoreData($projectPath: ID!) {
+      project(fullPath: $projectPath) {
+        events {
+          nodes {
             id
-            username
-            name
+            action
+            createdAt
+            author {
+              id
+              username
+              name
+            }
           }
         }
       }
@@ -22,16 +24,18 @@ export const GITLAB_EVENT_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleEventList($first: Int!, $after: String) {
-      events(first: $first, after: $after) {
-        nodes {
-          id
-          action
-          createdAt
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
+    query GetSimpleEventList($first: Int!, $after: String, $projectPath: ID!) {
+      project(fullPath: $projectPath) {
+        events(first: $first, after: $after) {
+          nodes {
+            id
+            action
+            createdAt
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }

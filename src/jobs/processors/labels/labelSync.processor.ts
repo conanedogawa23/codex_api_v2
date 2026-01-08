@@ -15,11 +15,108 @@ class LabelSyncProcessor extends BaseSyncProcessor<ILabel> {
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const projectPath = (options as LabelSyncJobData).projectPath;
-    return await gitlabLabelProcessor.fetchSimpleLabels(options.batchSize || 200, projectPath);
+
+    if (projectPath) {
+      return await gitlabLabelProcessor.fetchSimpleLabels(options.batchSize || 200, projectPath);
+    }
+
+    // No projectPath - fetch labels from all active projects
+    logger.info('Fetching labels from all active projects');
+    const Project = require('../../../models/Project').Project;
+    const projects = await Project.find({ isActive: true })
+      .select('pathWithNamespace')
+      .lean();
+
+    logger.info('Found active projects for label sync', { count: projects.length });
+
+    const allLabels: any[] = [];
+    for (const project of projects) {
+      try {
+        const labels = await gitlabLabelProcessor.fetchSimpleLabels(
+          options.batchSize || 200,
+          project.pathWithNamespace
+        );
+        allLabels.push(...labels);
+      } catch (error) {
+        logger.warn('Failed to fetch labels for project', {
+          projectPath: project.pathWithNamespace,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    logger.info('Fetched labels from all projects', { totalLabels: allLabels.length });
+    return allLabels;
   }
 
-  async fetchEntityData(ids: number[]): Promise<any> {
-    return await gitlabLabelProcessor.fetchLabelData(ids);
+  async fetchEntityData(ids: number[], projectPath?: string): Promise<any> {
+    return await gitlabLabelProcessor.fetchLabelData(ids, projectPath);
+  }
+
+  /**
+   * Override processEntity to pass projectPath parameter
+   */
+  protected async processEntity(
+    entity: any,
+    categorySyncResults: { [category: string]: import('../base/baseSyncProcessor').CategorySyncResult }
+  ): Promise<{ created: boolean; updated: boolean; skipped: boolean }> {
+    const gitlabId = this.extractGitLabId(entity);
+    const projectPath = entity.projectPath;
+
+    if (!projectPath) {
+      logger.error('Label entity missing projectPath', { gitlabId });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const existingEntity = await this.getExisting(gitlabId);
+
+    if (existingEntity) {
+      if (this.shouldSkipSync(existingEntity)) {
+        logger.debug(`Skipping ${this.entityName} sync`, {
+          entityId: gitlabId,
+          reason: 'Manual or non-syncable entity'
+        });
+        return { created: false, updated: false, skipped: true };
+      }
+
+      const detailedData = await this.fetchEntityData([gitlabId], projectPath);
+
+      if (!detailedData || !detailedData.data) {
+        logger.warn(`No detailed data found for ${this.entityName}`, { gitlabId, projectPath });
+        return { created: false, updated: false, skipped: true };
+      }
+
+      const mappedData = this.mapToModel(detailedData.data);
+      this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
+      const savedEntity = await this.updateModel(mappedData);
+
+      if (savedEntity) {
+        logger.debug(`Updated ${this.entityName}`, { gitlabId, projectPath });
+        return { created: false, updated: true, skipped: false };
+      }
+
+      logger.warn(`Failed to update ${this.entityName}`, { gitlabId, projectPath });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const detailedData = await this.fetchEntityData([gitlabId], projectPath);
+
+    if (!detailedData || !detailedData.data) {
+      logger.warn(`No detailed data found for new ${this.entityName}`, { gitlabId, projectPath });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const mappedData = this.mapToModel(detailedData.data);
+    this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
+    const savedEntity = await this.updateModel(mappedData);
+
+    if (savedEntity) {
+      logger.debug(`Created ${this.entityName}`, { gitlabId, projectPath });
+      return { created: true, updated: false, skipped: false };
+    }
+
+    logger.warn(`Failed to create ${this.entityName}`, { gitlabId, projectPath });
+    return { created: false, updated: false, skipped: true };
   }
 
   async getExisting(gitlabId: number): Promise<any> {

@@ -38,11 +38,49 @@ class IssueSyncProcessor extends BaseSyncProcessor<IIssue> {
 
   /**
    * Fetch issues from GitLab
+   * If no projectPath provided, iterates through all active projects
    */
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const { batchSize = 100 } = options;
     const projectPath = (options as IssueSyncJobData).projectPath;
-    return await gitlabIssueProcessor.fetchSimpleIssues(batchSize, projectPath);
+
+    if (projectPath) {
+      // Fetch issues for specific project
+      return await gitlabIssueProcessor.fetchSimpleIssues(batchSize, projectPath);
+    }
+
+    // No projectPath - fetch issues from all active projects
+    logger.info('Fetching issues from all active projects');
+    const Project = require('../../../models/Project').Project;
+    const projects = await Project.find({ isActive: true })
+      .select('pathWithNamespace')
+      .lean();
+
+    logger.info('Found active projects', { count: projects.length });
+
+    const allIssues: any[] = [];
+    for (const project of projects) {
+      try {
+        const issues = await gitlabIssueProcessor.fetchSimpleIssues(
+          batchSize,
+          project.pathWithNamespace
+        );
+        allIssues.push(...issues);
+        logger.debug('Fetched issues for project', {
+          projectPath: project.pathWithNamespace,
+          issueCount: issues.length
+        });
+      } catch (error) {
+        logger.warn('Failed to fetch issues for project', {
+          projectPath: project.pathWithNamespace,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        // Continue with next project
+      }
+    }
+
+    logger.info('Fetched issues from all projects', { totalIssues: allIssues.length });
+    return allIssues;
   }
 
   /**

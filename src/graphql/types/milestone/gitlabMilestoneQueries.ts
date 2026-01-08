@@ -5,9 +5,9 @@
 
 export const GITLAB_MILESTONE_QUERIES = {
   CORE_DATA: `
-    query GetMilestoneCoreData($ids: [ID!]!) {
-      milestones(ids: $ids) {
-        nodes {
+    query GetMilestoneCoreData($projectPath: ID!, $id: MilestoneID!) {
+      project(fullPath: $projectPath) {
+        milestone(id: $id) {
           id
           iid
           title
@@ -30,9 +30,9 @@ export const GITLAB_MILESTONE_QUERIES = {
   `,
 
   ISSUES: `
-    query GetMilestoneIssues($ids: [ID!]!) {
-      milestones(ids: $ids) {
-        nodes {
+    query GetMilestoneIssues($projectPath: ID!, $id: MilestoneID!) {
+      project(fullPath: $projectPath) {
+        milestone(id: $id) {
           id
           issues {
             nodes {
@@ -49,9 +49,9 @@ export const GITLAB_MILESTONE_QUERIES = {
   `,
 
   MERGE_REQUESTS: `
-    query GetMilestoneMergeRequests($ids: [ID!]!) {
-      milestones(ids: $ids) {
-        nodes {
+    query GetMilestoneMergeRequests($projectPath: ID!, $id: MilestoneID!) {
+      project(fullPath: $projectPath) {
+        milestone(id: $id) {
           id
           mergeRequests {
             nodes {
@@ -68,9 +68,9 @@ export const GITLAB_MILESTONE_QUERIES = {
   `,
 
   STATISTICS: `
-    query GetMilestoneStatistics($ids: [ID!]!) {
-      milestones(ids: $ids) {
-        nodes {
+    query GetMilestoneStatistics($projectPath: ID!, $id: MilestoneID!) {
+      project(fullPath: $projectPath) {
+        milestone(id: $id) {
           id
           stats {
             totalIssuesCount
@@ -82,7 +82,7 @@ export const GITLAB_MILESTONE_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleMilestoneList($first: Int!, $after: String, $projectPath: ID) {
+    query GetSimpleMilestoneList($first: Int!, $after: String, $projectPath: ID!) {
       project(fullPath: $projectPath) {
         milestones(first: $first, after: $after) {
           nodes {

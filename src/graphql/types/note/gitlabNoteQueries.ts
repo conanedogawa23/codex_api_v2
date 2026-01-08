@@ -1,36 +1,28 @@
 /**
  * GitLab Note GraphQL Queries
- * 2 categories: CORE_DATA, REACTIONS
+ * Note: Notes must be queried in context (Discussion, MR, or Issue)
+ * These queries use merge request context as an example
  */
 
 export const GITLAB_NOTE_QUERIES = {
   CORE_DATA: `
-    query GetNoteCoreData($ids: [ID!]!) {
-      notes(ids: $ids) {
-        nodes {
-          id
-          body
-          bodyHtml
-          createdAt
-          updatedAt
-          system
-          internal
-          noteable {
-            __typename
-            ... on Issue {
-              id
-              iid
-            }
-            ... on MergeRequest {
-              id
-              iid
-            }
-          }
-          author {
+    query GetNoteCoreData($mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        notes {
+          nodes {
             id
-            username
-            name
-            avatarUrl
+            body
+            bodyHtml
+            createdAt
+            updatedAt
+            system
+            internal
+            author {
+              id
+              username
+              name
+              avatarUrl
+            }
           }
         }
       }
@@ -38,16 +30,18 @@ export const GITLAB_NOTE_QUERIES = {
   `,
 
   REACTIONS: `
-    query GetNoteReactions($ids: [ID!]!) {
-      notes(ids: $ids) {
-        nodes {
-          id
-          awardEmoji {
-            nodes {
-              name
-              user {
-                id
-                username
+    query GetNoteReactions($mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        notes {
+          nodes {
+            id
+            awardEmoji {
+              nodes {
+                name
+                user {
+                  id
+                  username
+                }
               }
             }
           }
@@ -57,15 +51,18 @@ export const GITLAB_NOTE_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleNoteList($first: Int!, $after: String) {
-      notes(first: $first, after: $after) {
-        nodes {
-          id
-          createdAt
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
+    query GetSimpleNoteList($first: Int!, $after: String, $mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        notes(first: $first, after: $after) {
+          nodes {
+            id
+            body
+            createdAt
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }

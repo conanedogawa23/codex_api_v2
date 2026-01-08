@@ -1,13 +1,13 @@
 /**
  * GitLab WikiPage GraphQL Queries
- * 3 categories: CORE_DATA, CONTENT, HISTORY
+ * WikiPages are project-level and use project context
  */
 
 export const GITLAB_WIKI_PAGE_QUERIES = {
   CORE_DATA: `
-    query GetWikiPageCoreData($ids: [ID!]!) {
-      wikiPages(ids: $ids) {
-        nodes {
+    query GetWikiPageCoreData($projectPath: ID!, $slug: String!) {
+      project(fullPath: $projectPath) {
+        wikiPage(slug: $slug) {
           id
           title
           slug
@@ -20,9 +20,9 @@ export const GITLAB_WIKI_PAGE_QUERIES = {
   `,
 
   CONTENT: `
-    query GetWikiPageContent($ids: [ID!]!) {
-      wikiPages(ids: $ids) {
-        nodes {
+    query GetWikiPageContent($projectPath: ID!, $slug: String!) {
+      project(fullPath: $projectPath) {
+        wikiPage(slug: $slug) {
           id
           content
         }
@@ -31,9 +31,9 @@ export const GITLAB_WIKI_PAGE_QUERIES = {
   `,
 
   HISTORY: `
-    query GetWikiPageHistory($ids: [ID!]!) {
-      wikiPages(ids: $ids) {
-        nodes {
+    query GetWikiPageHistory($projectPath: ID!, $slug: String!) {
+      project(fullPath: $projectPath) {
+        wikiPage(slug: $slug) {
           id
         }
       }
@@ -48,6 +48,10 @@ export const GITLAB_WIKI_PAGE_QUERIES = {
             id
             title
             slug
+            format
+            createdAt
+            updatedAt
+            content
           }
           pageInfo {
             hasNextPage

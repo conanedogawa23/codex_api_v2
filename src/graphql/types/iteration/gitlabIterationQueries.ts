@@ -1,41 +1,45 @@
 /**
  * GitLab Iteration GraphQL Queries
- * 2 categories: CORE_DATA, ISSUES
+ * Iterations are group-level entities
  */
 
 export const GITLAB_ITERATION_QUERIES = {
   CORE_DATA: `
-    query GetIterationCoreData($ids: [ID!]!) {
-      iterations(ids: $ids) {
-        nodes {
-          id
-          iid
-          title
-          description
-          state
-          startDate
-          dueDate
-          createdAt
-          updatedAt
-          webPath
+    query GetIterationCoreData($groupPath: ID!, $iterationId: IterationID!) {
+      group(fullPath: $groupPath) {
+        iterations(first: 100) {
+          nodes {
+            id
+            iid
+            title
+            description
+            state
+            startDate
+            dueDate
+            createdAt
+            updatedAt
+            webPath
+          }
         }
       }
     }
   `,
 
   ISSUES: `
-    query GetIterationIssues($ids: [ID!]!) {
-      iterations(ids: $ids) {
-        nodes {
-          id
-          issues {
-            nodes {
-              id
-              iid
-              title
-              state
+    query GetIterationIssues($groupPath: ID!, $iterationId: IterationID!) {
+      group(fullPath: $groupPath) {
+        iterations(first: 100) {
+          nodes {
+            id
+            issues {
+              nodes {
+                id
+                iid
+                title
+                state
+              }
+              count
             }
-            count
           }
         }
       }
@@ -43,17 +47,25 @@ export const GITLAB_ITERATION_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleIterationList($first: Int!, $after: String) {
-      iterations(first: $first, after: $after) {
-        nodes {
-          id
-          iid
-          title
-          state
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
+    query GetSimpleIterationList($first: Int!, $after: String, $groupPath: ID!) {
+      group(fullPath: $groupPath) {
+        iterations(first: $first, after: $after) {
+          nodes {
+            id
+            iid
+            title
+            description
+            state
+            startDate
+            dueDate
+            createdAt
+            updatedAt
+            webPath
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }

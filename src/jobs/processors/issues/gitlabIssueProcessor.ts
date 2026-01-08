@@ -81,30 +81,37 @@ export class GitlabIssueProcessor {
 
   /**
    * Fetch comprehensive issue data using parallel category queries
+   * Fetches data for a single issue using individual queries for each category
    * Uses Promise.allSettled to ensure individual query failures don't stop the sync
    * 
-   * @param issueIds - Array of GitLab issue IDs
+   * @param issueIds - Array of GitLab issue IDs (should contain only one ID)
    * @returns Merged issue data from all successful category queries
    */
   async fetchIssueData(issueIds: number[]): Promise<any> {
-    logger.debug('Fetching comprehensive issue data', {
-      issueCount: issueIds.length,
-      issueIds
-    });
+    if (issueIds.length === 0) {
+      logger.warn('fetchIssueData called with empty issueIds array');
+      return { data: { issues: [] } };
+    }
 
-    // Convert numeric IDs to GitLab global IDs
-    const gitlabIds = issueIds.map(id => `gid://gitlab/Issue/${id}`);
+    // Fetch data for single issue (Base processor calls this per issue)
+    const issueId = issueIds[0];
+    const gitlabId = `gid://gitlab/Issue/${issueId}`;
+
+    logger.debug('Fetching comprehensive issue data', {
+      issueId,
+      gitlabId
+    });
 
     try {
       // Execute all category queries in parallel with Promise.allSettled
       // This ensures one failure doesn't stop other queries
       const results = await Promise.allSettled([
-        this.executeCategory('CORE_DATA', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.CORE_DATA, { ids: gitlabIds })),
-        this.executeCategory('ASSIGNEES_AUTHOR', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.ASSIGNEES_AUTHOR, { ids: gitlabIds })),
-        this.executeCategory('LABELS_MILESTONES', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.LABELS_MILESTONES, { ids: gitlabIds })),
-        this.executeCategory('RELATED_MRS', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.RELATED_MRS, { ids: gitlabIds })),
-        this.executeCategory('ISSUE_LINKS', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.ISSUE_LINKS, { ids: gitlabIds })),
-        this.executeCategory('TIME_TRACKING', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.TIME_TRACKING, { ids: gitlabIds }))
+        this.executeCategory('CORE_DATA', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.CORE_DATA, { id: gitlabId })),
+        this.executeCategory('ASSIGNEES_AUTHOR', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.ASSIGNEES_AUTHOR, { id: gitlabId })),
+        this.executeCategory('LABELS_MILESTONES', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.LABELS_MILESTONES, { id: gitlabId })),
+        this.executeCategory('RELATED_MRS', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.RELATED_MRS, { id: gitlabId })),
+        this.executeCategory('ISSUE_LINKS', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.ISSUE_LINKS, { id: gitlabId })),
+        this.executeCategory('TIME_TRACKING', gitlabApiClient.executeQuery(GITLAB_ISSUE_QUERIES.TIME_TRACKING, { id: gitlabId }))
       ]);
 
       // Extract results and handle failures
@@ -118,10 +125,10 @@ export class GitlabIssueProcessor {
       ] = results.map((result, index) => {
         if (result.status === 'rejected') {
           const categoryName = this.getCategoryName(index);
-          logger.error(`Failed to fetch ${categoryName} data for issues`, {
+          logger.error(`Failed to fetch ${categoryName} data for issue`, {
             error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
             category: categoryName,
-            issueIds
+            issueId
           });
           return null;
         }
@@ -139,7 +146,7 @@ export class GitlabIssueProcessor {
       );
 
       logger.debug('Successfully merged issue data from categories', {
-        issueCount: issueIds.length,
+        issueId,
         successfulCategories: results.filter(r => r.status === 'fulfilled').length,
         failedCategories: results.filter(r => r.status === 'rejected').length
       });
@@ -149,7 +156,7 @@ export class GitlabIssueProcessor {
       logger.error('Error fetching issue data', {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
-        issueIds
+        issueId
       });
       throw error;
     }
@@ -192,6 +199,7 @@ export class GitlabIssueProcessor {
   /**
    * Merge all category results into complete issue data
    * Handles null/undefined results gracefully from failed queries
+   * Works with single issue responses (not arrays)
    * @private
    */
   private mergeCompleteIssueData(
@@ -204,53 +212,52 @@ export class GitlabIssueProcessor {
   ): any {
     logger.debug('Merging issue data from all categories');
 
-    // Extract issue arrays from each category
-    const coreIssues = coreData?.data?.issues?.nodes || [];
-    const assigneesIssues = assigneesAuthor?.data?.issues?.nodes || [];
-    const labelsIssues = labelsMilestones?.data?.issues?.nodes || [];
-    const relatedMRsIssues = relatedMRs?.data?.issues?.nodes || [];
-    const linksIssues = issueLinks?.data?.issues?.nodes || [];
-    const timeTrackingIssues = timeTracking?.data?.issues?.nodes || [];
+    // Extract single issue from each category (using issue field, not issues.nodes)
+    const coreIssue = coreData?.data?.issue || null;
+    const assigneesData = assigneesAuthor?.data?.issue || null;
+    const labelsData = labelsMilestones?.data?.issue || null;
+    const mrsData = relatedMRs?.data?.issue || null;
+    const linksData = issueLinks?.data?.issue || null;
+    const timeData = timeTracking?.data?.issue || null;
 
-    // Use core data as base and merge additional data
-    const mergedIssues = coreIssues.map((coreIssue: any) => {
-      const issueId = coreIssue.id;
-
-      // Find matching data from other categories
-      const assigneesData = assigneesIssues.find((i: any) => i.id === issueId);
-      const labelsData = labelsIssues.find((i: any) => i.id === issueId);
-      const mrsData = relatedMRsIssues.find((i: any) => i.id === issueId);
-      const linksData = linksIssues.find((i: any) => i.id === issueId);
-      const timeData = timeTrackingIssues.find((i: any) => i.id === issueId);
-
-      // Merge all data into one issue object
+    // If no core data, return empty
+    if (!coreIssue) {
+      logger.warn('No core issue data available for merge');
       return {
-        ...coreIssue,
-        author: assigneesData?.author || null,
-        assignees: assigneesData?.assignees || { nodes: [] },
-        labels: labelsData?.labels || { nodes: [] },
-        milestone: labelsData?.milestone || null,
-        epic: labelsData?.epic || null,
-        relatedMergeRequests: mrsData?.relatedMergeRequests || { nodes: [], count: 0 },
-        closingMergeRequests: mrsData?.closingMergeRequests || { nodes: [] },
-        blockedByIssues: linksData?.blockedByIssues || { nodes: [], count: 0 },
-        blockingIssues: linksData?.blockingIssues || { nodes: [], count: 0 },
-        relatedIssues: linksData?.relatedIssues || { nodes: [], count: 0 },
-        timeEstimate: timeData?.timeEstimate || 0,
-        totalTimeSpent: timeData?.totalTimeSpent || 0,
-        humanTimeEstimate: timeData?.humanTimeEstimate || null,
-        humanTotalTimeSpent: timeData?.humanTotalTimeSpent || null,
-        timelogs: timeData?.timelogs || { nodes: [], count: 0 }
+        data: {
+          issues: []
+        }
       };
-    });
+    }
+
+    // Merge all data into one issue object
+    const mergedIssue = {
+      ...coreIssue,
+      author: assigneesData?.author || null,
+      assignees: assigneesData?.assignees || { nodes: [] },
+      labels: labelsData?.labels || { nodes: [] },
+      milestone: labelsData?.milestone || null,
+      epic: labelsData?.epic || null,
+      relatedMergeRequests: mrsData?.relatedMergeRequests || { nodes: [], count: 0 },
+      closingMergeRequests: mrsData?.closingMergeRequests || { nodes: [] },
+      blockedByIssues: linksData?.blockedByIssues || { nodes: [], count: 0 },
+      blockingIssues: linksData?.blockingIssues || { nodes: [], count: 0 },
+      relatedIssues: linksData?.relatedIssues || { nodes: [], count: 0 },
+      timeEstimate: timeData?.timeEstimate || 0,
+      totalTimeSpent: timeData?.totalTimeSpent || 0,
+      humanTimeEstimate: timeData?.humanTimeEstimate || null,
+      humanTotalTimeSpent: timeData?.humanTotalTimeSpent || null,
+      timelogs: timeData?.timelogs || { nodes: [], count: 0 }
+    };
 
     logger.debug('Issue data merge complete', {
-      issueCount: mergedIssues.length
+      issueId: mergedIssue.id
     });
 
+    // Return in array format for consistency with the processor
     return {
       data: {
-        issues: mergedIssues
+        issues: [mergedIssue]
       }
     };
   }

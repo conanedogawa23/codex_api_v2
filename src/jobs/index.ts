@@ -63,19 +63,19 @@ export class JobManager {
 
       // Initialize issue sync scheduler
       this.issueSyncScheduler = new IssueSyncScheduler(issueSyncQueue);
-      issueSyncQueue.process(processIssueSync);
+      issueSyncQueue.process('issue-sync', processIssueSync);
       await this.issueSyncScheduler.scheduleRecurring();
       logger.info('Issue sync scheduler initialized');
 
       // Initialize merge request sync scheduler
       this.mergeRequestSyncScheduler = new MergeRequestSyncScheduler(mergeRequestSyncQueue);
-      mergeRequestSyncQueue.process(processMergeRequestSync);
+      mergeRequestSyncQueue.process('merge-request-sync', processMergeRequestSync);
       await this.mergeRequestSyncScheduler.scheduleRecurring();
       logger.info('Merge request sync scheduler initialized');
 
       // Initialize namespace sync scheduler
       this.namespaceSyncScheduler = new NamespaceSyncScheduler(namespaceSyncQueue);
-      namespaceSyncQueue.process(processNamespaceSync);
+      namespaceSyncQueue.process('namespace-sync', processNamespaceSync);
       await this.namespaceSyncScheduler.scheduleRecurring();
       logger.info('Namespace sync scheduler initialized');
 
@@ -83,6 +83,39 @@ export class JobManager {
       logger.info('Job manager initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize job manager', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Initialize ONLY merge request sync scheduler (selective initialization)
+   */
+  public async initializeMergeRequestSyncOnly(): Promise<void> {
+    if (this.isInitialized) {
+      logger.warn('Job manager already initialized');
+      return;
+    }
+
+    try {
+      logger.info('Initializing merge request sync job only...');
+
+      // Initialize ONLY merge request sync scheduler
+      this.mergeRequestSyncScheduler = new MergeRequestSyncScheduler(mergeRequestSyncQueue);
+      
+      // Register processor with explicit job name
+      mergeRequestSyncQueue.process('merge-request-sync', processMergeRequestSync);
+      logger.info('Merge request processor registered');
+      
+      await this.mergeRequestSyncScheduler.scheduleRecurring();
+      logger.info('Merge request sync scheduler initialized');
+
+      this.isInitialized = true;
+      logger.info('Merge request sync job initialized successfully (other jobs disabled)');
+    } catch (error) {
+      logger.error('Failed to initialize merge request sync job', {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });

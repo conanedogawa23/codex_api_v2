@@ -5,88 +5,78 @@
 
 export const GITLAB_NAMESPACE_QUERIES = {
   CORE_DATA: `
-    query GetNamespaceCoreData($ids: [ID!]!) {
-      namespaces(ids: $ids) {
-        nodes {
-          id
-          name
-          path
-          fullName
-          fullPath
-          description
-          descriptionHtml
-          visibility
-          lfsEnabled
-          requestAccessEnabled
-          rootStorageStatistics {
-            storageSize
-            repositorySize
-            lfsObjectsSize
-            buildArtifactsSize
-            packagesSize
-            wikiSize
-            snippetsSize
-          }
+    query GetNamespaceCoreData($fullPath: ID!) {
+      group(fullPath: $fullPath) {
+        id
+        name
+        path
+        fullName
+        fullPath
+        description
+        descriptionHtml
+        visibility
+        lfsEnabled
+        requestAccessEnabled
+        rootStorageStatistics {
+          storageSize
+          repositorySize
+          lfsObjectsSize
+          buildArtifactsSize
+          packagesSize
+          wikiSize
+          snippetsSize
         }
       }
     }
   `,
 
   PROJECTS: `
-    query GetNamespaceProjects($ids: [ID!]!) {
-      namespaces(ids: $ids) {
-        nodes {
-          id
-          projects {
-            nodes {
-              id
-              name
-              path
-              fullPath
-            }
-            count
+    query GetNamespaceProjects($fullPath: ID!) {
+      group(fullPath: $fullPath) {
+        id
+        projects {
+          nodes {
+            id
+            name
+            path
+            fullPath
           }
+          count
         }
       }
     }
   `,
 
   GROUPS: `
-    query GetNamespaceGroups($ids: [ID!]!) {
-      namespaces(ids: $ids) {
-        nodes {
-          id
-          ... on Group {
-            descendantGroups {
-              nodes {
-                id
-                name
-                path
-                fullPath
-              }
-              count
-            }
+    query GetNamespaceGroups($fullPath: ID!) {
+      group(fullPath: $fullPath) {
+        id
+        descendantGroups {
+          nodes {
+            id
+            name
+            path
+            fullPath
           }
+          count
         }
       }
     }
   `,
 
   STATISTICS: `
-    query GetNamespaceStatistics($ids: [ID!]!) {
-      namespaces(ids: $ids) {
-        nodes {
-          id
-          rootStorageStatistics {
-            storageSize
-            repositorySize
-            lfsObjectsSize
-            buildArtifactsSize
-            packagesSize
-            wikiSize
-            snippetsSize
-            uploadsSize
-          }
+    query GetNamespaceStatistics($fullPath: ID!) {
+      group(fullPath: $fullPath) {
+        id
+        rootStorageStatistics {
+          storageSize
+          repositorySize
+          lfsObjectsSize
+          buildArtifactsSize
+          packagesSize
+          wikiSize
+          snippetsSize
+          uploadsSize
         }
       }
     }
@@ -94,7 +84,7 @@ export const GITLAB_NAMESPACE_QUERIES = {
 
   SIMPLE_LIST: `
     query GetSimpleNamespaceList($first: Int!, $after: String) {
-      namespaces(first: $first, after: $after) {
+      groups(first: $first, after: $after) {
         nodes {
           id
           name

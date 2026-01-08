@@ -25,42 +25,96 @@ export class GitlabMergeRequestProcessor {
     const allMRs: any[] = [];
     let hasNextPage = true;
     let after: string | null = null;
+    let pageCount = 0;
+    const maxPages = 100; // Allows fetching up to 10,000 MRs per project (100 pages * 100 per page)
 
     try {
-      while (hasNextPage) {
-        const query = projectPath ? GITLAB_MERGE_REQUEST_QUERIES.SIMPLE_LIST : GITLAB_MERGE_REQUEST_QUERIES.SIMPLE_LIST_ALL;
+      while (hasNextPage && pageCount < maxPages) {
+        pageCount++;
+        
+        const query = projectPath 
+          ? GITLAB_MERGE_REQUEST_QUERIES.SIMPLE_LIST 
+          : GITLAB_MERGE_REQUEST_QUERIES.SIMPLE_LIST_ALL;
+          
         const variables = projectPath
           ? { first: batchSize, after, projectPath }
           : { first: batchSize, after };
 
+        logger.debug('Executing GitLab query for merge requests', {
+          query: projectPath ? 'SIMPLE_LIST' : 'SIMPLE_LIST_ALL',
+          variables,
+          pageCount
+        });
+
         const result = await gitlabApiClient.executeQuery(query, variables);
 
-        const mrsData: any = projectPath
-          ? (result as any)?.data?.project?.mergeRequests
-          : (result as any)?.data?.mergeRequests;
+        // Validate response structure
+        if (!result || !result.data) {
+          logger.error('Invalid response from GitLab API', {
+            hasResult: !!result,
+            hasData: !!(result as any)?.data,
+            responseKeys: result ? Object.keys(result) : []
+          });
+          hasNextPage = false;
+          break;
+        }
 
-        if (mrsData?.nodes) {
-          allMRs.push(...mrsData.nodes);
+        const mrsData: any = projectPath
+          ? (result as any).data?.project?.mergeRequests
+          : (result as any).data?.mergeRequests;
+
+        if (!mrsData) {
+          logger.warn('No merge requests data in GitLab response', {
+            hasProject: !!(result as any).data?.project,
+            hasMergeRequests: !!(result as any).data?.mergeRequests,
+            dataKeys: Object.keys((result as any).data || {}),
+            projectPath
+          });
+          hasNextPage = false;
+          break;
+        }
+
+        if (mrsData.nodes && Array.isArray(mrsData.nodes)) {
+          const validMRs = mrsData.nodes.filter((mr: any) => {
+            if (!mr || !mr.id) {
+              logger.warn('Skipping invalid MR node', { mr });
+              return false;
+            }
+            return true;
+          });
+
+          allMRs.push(...validMRs);
           hasNextPage = mrsData.pageInfo?.hasNextPage || false;
           after = mrsData.pageInfo?.endCursor || null;
 
-          logger.debug('Fetched MR batch', {
-            batchSize: mrsData.nodes.length,
+          logger.debug('Fetched MR batch successfully', {
+            batchSize: validMRs.length,
             totalMRs: allMRs.length,
-            hasNextPage
+            hasNextPage,
+            pageCount,
+            endCursor: after
           });
         } else {
-          logger.warn('No MRs data in response', {
-            hasNodes: !!mrsData?.nodes,
-            dataKeys: Object.keys((result as any)?.data || {})
+          logger.warn('MR nodes missing or invalid', {
+            hasNodes: !!mrsData.nodes,
+            isArray: Array.isArray(mrsData.nodes),
+            mrsDataKeys: Object.keys(mrsData)
           });
           hasNextPage = false;
         }
       }
 
+      if (pageCount >= maxPages) {
+        logger.warn('Reached maximum page limit for MR fetch', {
+          maxPages,
+          mrsFetched: allMRs.length
+        });
+      }
+
       logger.info('Successfully fetched all simple merge requests', {
         totalMRs: allMRs.length,
-        projectPath
+        pagesFetched: pageCount,
+        projectPath: projectPath || 'all projects'
       });
 
       return allMRs;
@@ -69,95 +123,151 @@ export class GitlabMergeRequestProcessor {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
         mrsFetchedBeforeError: allMRs.length,
-        projectPath
+        pagesFetched: pageCount,
+        projectPath: projectPath || 'all projects'
       });
+      
+      // Return partial results if any were fetched before error
+      if (allMRs.length > 0) {
+        logger.info('Returning partial MR results after error', {
+          mrCount: allMRs.length
+        });
+        return allMRs;
+      }
+      
       throw error;
     }
   }
 
   /**
-   * Fetch comprehensive MR data using parallel category queries
+   * Fetch comprehensive MR data using individual queries
+   * Fetches each MR one at a time with all category data
    * Uses Promise.allSettled to ensure individual query failures don't stop the sync
    */
   async fetchMergeRequestData(mrIds: number[]): Promise<any> {
+    if (!mrIds || mrIds.length === 0) {
+      logger.warn('No merge request IDs provided for fetching');
+      return { data: { mergeRequests: [] } };
+    }
+
     logger.debug('Fetching comprehensive merge request data', {
       mrCount: mrIds.length,
-      mrIds
+      mrIds: mrIds.slice(0, 5), // Log first 5 IDs only
+      totalIds: mrIds.length
     });
 
-    const gitlabIds = mrIds.map(id => `gid://gitlab/MergeRequest/${id}`);
+    const allMergeRequests: any[] = [];
 
-    try {
-      const results = await Promise.allSettled([
-        this.executeCategory('CORE_DATA', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CORE_DATA, { ids: gitlabIds })),
-        this.executeCategory('REVIEWERS_ASSIGNEES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.REVIEWERS_ASSIGNEES, { ids: gitlabIds })),
-        this.executeCategory('APPROVALS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.APPROVALS, { ids: gitlabIds })),
-        this.executeCategory('PIPELINES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.PIPELINES, { ids: gitlabIds })),
-        this.executeCategory('DIFF_STATS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DIFF_STATS, { ids: gitlabIds })),
-        this.executeCategory('DISCUSSIONS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DISCUSSIONS, { ids: gitlabIds })),
-        this.executeCategory('COMMITS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.COMMITS, { ids: gitlabIds })),
-        this.executeCategory('CHANGES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CHANGES, { ids: gitlabIds }))
-      ]);
+    // Fetch each MR individually with all its category data
+    for (const mrId of mrIds) {
+      try {
+        const gitlabId = `gid://gitlab/MergeRequest/${mrId}`;
+        
+        // Fetch all categories for this single MR in parallel
+        const results = await Promise.allSettled([
+          this.executeCategory('CORE_DATA', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CORE_DATA, { id: gitlabId })),
+          this.executeCategory('REVIEWERS_ASSIGNEES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.REVIEWERS_ASSIGNEES, { id: gitlabId })),
+          this.executeCategory('APPROVALS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.APPROVALS, { id: gitlabId })),
+          this.executeCategory('PIPELINES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.PIPELINES, { id: gitlabId })),
+          this.executeCategory('DIFF_STATS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DIFF_STATS, { id: gitlabId })),
+          this.executeCategory('DISCUSSIONS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DISCUSSIONS, { id: gitlabId })),
+          this.executeCategory('COMMITS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.COMMITS, { id: gitlabId })),
+          this.executeCategory('CHANGES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CHANGES, { id: gitlabId }))
+        ]);
 
-      const [
-        coreDataResults,
-        reviewersAssigneesResults,
-        approvalsResults,
-        pipelinesResults,
-        diffStatsResults,
-        discussionsResults,
-        commitsResults,
-        changesResults
-      ] = results.map((result, index) => {
-        if (result.status === 'rejected') {
-          const categoryName = this.getCategoryName(index);
-          logger.error(`Failed to fetch ${categoryName} data for merge requests`, {
-            error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
-            category: categoryName,
-            mrIds
-          });
-          return null;
+        const [
+          coreDataResult,
+          reviewersAssigneesResult,
+          approvalsResult,
+          pipelinesResult,
+          diffStatsResult,
+          discussionsResult,
+          commitsResult,
+          changesResult
+        ] = results.map((result, index) => {
+          if (result.status === 'rejected') {
+            const categoryName = this.getCategoryName(index);
+            logger.warn(`Failed to fetch ${categoryName} for MR ${mrId}`, {
+              error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
+              category: categoryName,
+              mrId
+            });
+            return null;
+          }
+          return result.value;
+        });
+
+        // If we got core data, merge all category data for this MR
+        if (coreDataResult && coreDataResult.data?.mergeRequest) {
+          const mergedMR = this.mergeSingleMergeRequestData(
+            coreDataResult.data.mergeRequest,
+            reviewersAssigneesResult?.data?.mergeRequest,
+            approvalsResult?.data?.mergeRequest,
+            pipelinesResult?.data?.mergeRequest,
+            diffStatsResult?.data?.mergeRequest,
+            discussionsResult?.data?.mergeRequest,
+            commitsResult?.data?.mergeRequest,
+            changesResult?.data?.mergeRequest
+          );
+
+          allMergeRequests.push(mergedMR);
+
+          const successfulCategories = results.filter(r => r.status === 'fulfilled').length;
+          logger.debug(`Fetched MR ${mrId} with ${successfulCategories}/8 categories`);
+        } else {
+          logger.warn(`No core data for MR ${mrId} - skipping`);
         }
-        return result.value;
-      });
 
-      const mergedData = this.mergeCompleteMergeRequestData(
-        coreDataResults,
-        reviewersAssigneesResults,
-        approvalsResults,
-        pipelinesResults,
-        diffStatsResults,
-        discussionsResults,
-        commitsResults,
-        changesResults
-      );
-
-      logger.debug('Successfully merged merge request data from categories', {
-        mrCount: mrIds.length,
-        successfulCategories: results.filter(r => r.status === 'fulfilled').length,
-        failedCategories: results.filter(r => r.status === 'rejected').length
-      });
-
-      return mergedData;
-    } catch (error: unknown) {
-      logger.error('Error fetching merge request data', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        mrIds
-      });
-      throw error;
+      } catch (error: unknown) {
+        logger.error(`Error fetching MR ${mrId}`, {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          mrId
+        });
+        // Continue with next MR
+      }
     }
+
+    logger.info('Completed fetching all merge requests', {
+      requested: mrIds.length,
+      fetched: allMergeRequests.length
+    });
+
+    return {
+      data: {
+        mergeRequests: allMergeRequests
+      }
+    };
   }
 
   private async executeCategory(categoryName: string, queryPromise: Promise<any>): Promise<any> {
+    const startTime = Date.now();
     try {
       const result = await queryPromise;
-      logger.debug(`Successfully fetched ${categoryName} data`);
+      const duration = Date.now() - startTime;
+      
+      // Validate result structure
+      if (!result || !result.data) {
+        logger.warn(`${categoryName} query returned invalid structure`, {
+          hasResult: !!result,
+          hasData: !!result?.data,
+          duration
+        });
+      } else {
+        logger.debug(`Successfully fetched ${categoryName} data`, {
+          duration,
+          hasNodes: !!result.data.mergeRequests?.nodes,
+          nodeCount: result.data.mergeRequests?.nodes?.length || 0
+        });
+      }
+      
       return result;
     } catch (error: unknown) {
+      const duration = Date.now() - startTime;
       logger.error(`Failed to execute ${categoryName} query`, {
         error: error instanceof Error ? error.message : 'Unknown error',
-        category: categoryName
+        errorStack: error instanceof Error ? error.stack : undefined,
+        category: categoryName,
+        duration
       });
       throw error;
     }
@@ -177,7 +287,10 @@ export class GitlabMergeRequestProcessor {
     return categories[index] || `Unknown_${index}`;
   }
 
-  private mergeCompleteMergeRequestData(
+  /**
+   * Merge data from all categories for a single MR
+   */
+  private mergeSingleMergeRequestData(
     coreData: any,
     reviewersAssignees: any,
     approvals: any,
@@ -187,59 +300,26 @@ export class GitlabMergeRequestProcessor {
     commits: any,
     changes: any
   ): any {
-    logger.debug('Merging merge request data from all categories');
-
-    const coreMRs = coreData?.data?.mergeRequests?.nodes || [];
-    const reviewersMRs = reviewersAssignees?.data?.mergeRequests?.nodes || [];
-    const approvalsMRs = approvals?.data?.mergeRequests?.nodes || [];
-    const pipelinesMRs = pipelines?.data?.mergeRequests?.nodes || [];
-    const diffStatsMRs = diffStats?.data?.mergeRequests?.nodes || [];
-    const discussionsMRs = discussions?.data?.mergeRequests?.nodes || [];
-    const commitsMRs = commits?.data?.mergeRequests?.nodes || [];
-    const changesMRs = changes?.data?.mergeRequests?.nodes || [];
-
-    const mergedMRs = coreMRs.map((coreMR: any) => {
-      const mrId = coreMR.id;
-
-      const reviewersData = reviewersMRs.find((mr: any) => mr.id === mrId);
-      const approvalsData = approvalsMRs.find((mr: any) => mr.id === mrId);
-      const pipelinesData = pipelinesMRs.find((mr: any) => mr.id === mrId);
-      const diffStatsData = diffStatsMRs.find((mr: any) => mr.id === mrId);
-      const discussionsData = discussionsMRs.find((mr: any) => mr.id === mrId);
-      const commitsData = commitsMRs.find((mr: any) => mr.id === mrId);
-      const changesData = changesMRs.find((mr: any) => mr.id === mrId);
-
-      return {
-        ...coreMR,
-        author: reviewersData?.author || null,
-        assignees: reviewersData?.assignees || { nodes: [] },
-        reviewers: reviewersData?.reviewers || { nodes: [] },
-        mergedBy: reviewersData?.mergedBy || null,
-        approved: approvalsData?.approved || false,
-        approvedBy: approvalsData?.approvedBy || { nodes: [] },
-        approvalsLeft: approvalsData?.approvalsLeft || 0,
-        approvalsRequired: approvalsData?.approvalsRequired || 0,
-        approvalState: approvalsData?.approvalState || null,
-        headPipeline: pipelinesData?.headPipeline || null,
-        pipelines: pipelinesData?.pipelines || { nodes: [], count: 0 },
-        diffStats: diffStatsData?.diffStats || null,
-        diffStatsSummary: diffStatsData?.diffStatsSummary || null,
-        discussions: discussionsData?.discussions || { nodes: [] },
-        commits: commitsData?.commits || { nodes: [], count: 0 },
-        commitCount: commitsData?.commitCount || 0,
-        diffRefs: changesData?.diffRefs || null,
-        diffHeadSha: changesData?.diffHeadSha || null
-      };
-    });
-
-    logger.debug('Merge request data merge complete', {
-      mrCount: mergedMRs.length
-    });
-
     return {
-      data: {
-        mergeRequests: mergedMRs
-      }
+      ...coreData,
+      author: reviewersAssignees?.author || null,
+      assignees: reviewersAssignees?.assignees || { nodes: [] },
+      reviewers: reviewersAssignees?.reviewers || { nodes: [] },
+      mergedBy: reviewersAssignees?.mergedBy || null,
+      approved: approvals?.approved || false,
+      approvedBy: approvals?.approvedBy || { nodes: [] },
+      approvalsLeft: approvals?.approvalsLeft || 0,
+      approvalsRequired: approvals?.approvalsRequired || 0,
+      approvalState: approvals?.approvalState || null,
+      headPipeline: pipelines?.headPipeline || null,
+      pipelines: pipelines?.pipelines || { nodes: [], count: 0 },
+      diffStats: diffStats?.diffStats || null,
+      diffStatsSummary: diffStats?.diffStatsSummary || null,
+      discussions: discussions?.discussions || { nodes: [] },
+      commits: commits?.commits || { nodes: [], count: 0 },
+      commitCount: commits?.commitCount || 0,
+      diffRefs: changes?.diffRefs || null,
+      diffHeadSha: changes?.diffHeadSha || null
     };
   }
 }

@@ -4,7 +4,7 @@ import { GITLAB_NAMESPACE_QUERIES } from '../../../graphql/types/namespace/gitla
 
 export class GitlabNamespaceProcessor {
   async fetchSimpleNamespaces(batchSize: number = 100): Promise<any[]> {
-    logger.info('Fetching simple namespaces from GitLab', { batchSize });
+    logger.info('Fetching simple namespaces (groups) from GitLab', { batchSize });
     const allNamespaces: any[] = [];
     let hasNextPage = true;
     let after: string | null = null;
@@ -16,13 +16,17 @@ export class GitlabNamespaceProcessor {
           after
         });
 
-        const namespacesData: any = (result as any)?.data?.namespaces;
-        if (namespacesData?.nodes) {
-          allNamespaces.push(...namespacesData.nodes);
-          hasNextPage = namespacesData.pageInfo?.hasNextPage || false;
-          after = namespacesData.pageInfo?.endCursor || null;
-          logger.debug('Fetched namespace batch', { batchSize: namespacesData.nodes.length });
+        const groupsData: any = (result as any)?.data?.groups;
+        if (groupsData?.nodes) {
+          allNamespaces.push(...groupsData.nodes);
+          hasNextPage = groupsData.pageInfo?.hasNextPage || false;
+          after = groupsData.pageInfo?.endCursor || null;
+          logger.debug('Fetched namespace batch', { batchSize: groupsData.nodes.length });
         } else {
+          logger.warn('No groups data in response', {
+            hasNodes: !!groupsData?.nodes,
+            dataKeys: Object.keys((result as any)?.data || {})
+          });
           hasNextPage = false;
         }
       }
@@ -37,41 +41,66 @@ export class GitlabNamespaceProcessor {
     }
   }
 
-  async fetchNamespaceData(namespaceIds: number[]): Promise<any> {
-    const gitlabIds = namespaceIds.map(id => `gid://gitlab/Namespace/${id}`);
+  async fetchNamespaceData(namespaceIds: number[], fullPath?: string): Promise<any> {
+    if (namespaceIds.length === 0 && !fullPath) {
+      logger.warn('fetchNamespaceData called with no IDs or fullPath');
+      return { data: { namespaces: [] } };
+    }
+
+    // Use fullPath if provided, otherwise this won't work properly
+    // The base processor should pass fullPath in the entity data
+    if (!fullPath) {
+      logger.error('fetchNamespaceData requires fullPath parameter for group queries');
+      return { data: { namespaces: [] } };
+    }
+
+    logger.debug('Fetching comprehensive namespace data', { fullPath });
 
     try {
       const results = await Promise.allSettled([
-        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.CORE_DATA, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.PROJECTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.GROUPS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.STATISTICS, { ids: gitlabIds })
+        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.CORE_DATA, { fullPath }),
+        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.PROJECTS, { fullPath }),
+        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.GROUPS, { fullPath }),
+        gitlabApiClient.executeQuery(GITLAB_NAMESPACE_QUERIES.STATISTICS, { fullPath })
       ]);
 
       const [coreData, projects, groups, statistics] = results.map((result, index) => {
         if (result.status === 'rejected') {
-          logger.error(`Failed to fetch namespace category ${index}`, { error: result.reason });
+          logger.error(`Failed to fetch namespace category ${index}`, { 
+            error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
+            fullPath 
+          });
           return null;
         }
         return result.value;
       });
 
-      const coreNamespaces = coreData?.data?.namespaces?.nodes || [];
-      const projectsNamespaces = projects?.data?.namespaces?.nodes || [];
-      const groupsNamespaces = groups?.data?.namespaces?.nodes || [];
-      const statsNamespaces = statistics?.data?.namespaces?.nodes || [];
+      // Extract single group from each category response
+      const coreGroup = coreData?.data?.group || null;
+      const projectsData = projects?.data?.group || null;
+      const groupsData = groups?.data?.group || null;
+      const statsData = statistics?.data?.group || null;
 
-      const mergedNamespaces = coreNamespaces.map((ns: any) => ({
-        ...ns,
-        projects: projectsNamespaces.find((p: any) => p.id === ns.id)?.projects || { nodes: [], count: 0 },
-        groups: groupsNamespaces.find((g: any) => g.id === ns.id)?.descendantGroups || { nodes: [], count: 0 },
-        statistics: statsNamespaces.find((s: any) => s.id === ns.id)?.rootStorageStatistics || null
-      }));
+      if (!coreGroup) {
+        logger.warn('No core group data available', { fullPath });
+        return { data: { namespaces: [] } };
+      }
 
-      return { data: { namespaces: mergedNamespaces } };
+      // Merge all data into one namespace object
+      const mergedNamespace = {
+        ...coreGroup,
+        projects: projectsData?.projects || { nodes: [], count: 0 },
+        groups: groupsData?.descendantGroups || { nodes: [], count: 0 },
+        statistics: statsData?.rootStorageStatistics || null
+      };
+
+      logger.debug('Successfully merged namespace data', { fullPath });
+
+      return { data: { namespaces: [mergedNamespace] } };
     } catch (error: unknown) {
       logger.error('Error fetching namespace data', {
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        fullPath
       });
       throw error;
     }

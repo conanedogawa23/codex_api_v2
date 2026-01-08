@@ -5,9 +5,9 @@
 
 export const GITLAB_PIPELINE_QUERIES = {
   CORE_DATA: `
-    query GetPipelineCoreData($ids: [ID!]!) {
-      ciPipelines(ids: $ids) {
-        nodes {
+    query GetPipelineCoreData($projectPath: ID!, $iid: ID!) {
+      project(fullPath: $projectPath) {
+        pipeline(iid: $iid) {
           id
           iid
           status
@@ -55,9 +55,9 @@ export const GITLAB_PIPELINE_QUERIES = {
   `,
 
   JOBS: `
-    query GetPipelineJobs($ids: [ID!]!) {
-      ciPipelines(ids: $ids) {
-        nodes {
+    query GetPipelineJobs($projectPath: ID!, $iid: ID!) {
+      project(fullPath: $projectPath) {
+        pipeline(iid: $iid) {
           id
           jobs {
             nodes {
@@ -86,9 +86,9 @@ export const GITLAB_PIPELINE_QUERIES = {
   `,
 
   TEST_REPORTS: `
-    query GetPipelineTestReports($ids: [ID!]!) {
-      ciPipelines(ids: $ids) {
-        nodes {
+    query GetPipelineTestReports($projectPath: ID!, $iid: ID!) {
+      project(fullPath: $projectPath) {
+        pipeline(iid: $iid) {
           id
           testReportSummary {
             total {
@@ -105,9 +105,9 @@ export const GITLAB_PIPELINE_QUERIES = {
   `,
 
   VARIABLES: `
-    query GetPipelineVariables($ids: [ID!]!) {
-      ciPipelines(ids: $ids) {
-        nodes {
+    query GetPipelineVariables($projectPath: ID!, $iid: ID!) {
+      project(fullPath: $projectPath) {
+        pipeline(iid: $iid) {
           id
           variables {
             nodes {
@@ -123,9 +123,9 @@ export const GITLAB_PIPELINE_QUERIES = {
   `,
 
   ARTIFACTS: `
-    query GetPipelineArtifacts($ids: [ID!]!) {
-      ciPipelines(ids: $ids) {
-        nodes {
+    query GetPipelineArtifacts($projectPath: ID!, $iid: ID!) {
+      project(fullPath: $projectPath) {
+        pipeline(iid: $iid) {
           id
           jobs {
             nodes {
@@ -147,7 +147,7 @@ export const GITLAB_PIPELINE_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimplePipelineList($first: Int!, $after: String, $projectPath: ID) {
+    query GetSimplePipelineList($first: Int!, $after: String, $projectPath: ID!) {
       project(fullPath: $projectPath) {
         pipelines(first: $first, after: $after) {
           nodes {

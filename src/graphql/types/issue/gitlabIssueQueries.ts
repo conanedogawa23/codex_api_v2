@@ -13,56 +13,48 @@
 export const GITLAB_ISSUE_QUERIES = {
   /**
    * Core Issue Data Query
-   * Fetches essential issue information
+   * Fetches essential issue information for a single issue
    */
   CORE_DATA: `
-    query GetIssueCoreData($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
+    query GetIssueCoreData($id: IssueID!) {
+      issue(id: $id) {
+        id
+        iid
+        title
+        titleHtml
+        description
+        descriptionHtml
+        state
+        type
+        confidential
+        closedAt
+        createdAt
+        updatedAt
+        dueDate
+        weight
+        healthStatus
+        iteration {
           id
-          iid
           title
-          titleHtml
-          description
-          descriptionHtml
-          state
-          type
-          confidential
-          closed
-          closedAt
-          createdAt
-          updatedAt
+          startDate
           dueDate
-          weight
-          healthStatus
-          iteration {
-            id
-            title
-            startDate
-            dueDate
-          }
-          taskCompletionStatus {
-            count
-            completedCount
-          }
-          webUrl
-          relativePosition
-          severity
-          upvotes
-          downvotes
-          userNotesCount
-          mergeRequestsCount
-          discussionLocked
-          moved
-          movedTo {
-            id
-            title
-          }
-          project {
-            id
-            name
-            fullPath
-          }
+        }
+        taskCompletionStatus {
+          count
+          completedCount
+        }
+        webUrl
+        relativePosition
+        severity
+        upvotes
+        downvotes
+        userNotesCount
+        mergeRequestsCount
+        discussionLocked
+        moved
+        movedTo {
+          id
+          title
         }
       }
     }
@@ -73,27 +65,23 @@ export const GITLAB_ISSUE_QUERIES = {
    * Fetches people involved with the issue
    */
   ASSIGNEES_AUTHOR: `
-    query GetIssueAssigneesAuthor($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
+    query GetIssueAssigneesAuthor($id: IssueID!) {
+      issue(id: $id) {
+        id
+        author {
           id
-          author {
+          username
+          name
+          avatarUrl
+          state
+        }
+        assignees {
+          nodes {
             id
             username
             name
             avatarUrl
-            webUrl
             state
-          }
-          assignees {
-            nodes {
-              id
-              username
-              name
-              avatarUrl
-              webUrl
-              state
-            }
           }
         }
       }
@@ -105,37 +93,33 @@ export const GITLAB_ISSUE_QUERIES = {
    * Fetches categorization information
    */
   LABELS_MILESTONES: `
-    query GetIssueLabelsMillestones($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
-          id
-          labels {
-            nodes {
-              id
-              title
-              description
-              color
-              textColor
-            }
-          }
-          milestone {
+    query GetIssueLabelsMillestones($id: IssueID!) {
+      issue(id: $id) {
+        id
+        labels {
+          nodes {
             id
             title
             description
-            state
-            dueDate
-            startDate
-            webUrl
-            expired
+            color
+            textColor
           }
-          epic {
-            id
-            title
-            state
-            webUrl
-            startDate
-            dueDate
-          }
+        }
+        milestone {
+          id
+          title
+          description
+          state
+          dueDate
+          startDate
+          expired
+        }
+        epic {
+          id
+          title
+          state
+          startDate
+          dueDate
         }
       }
     }
@@ -146,37 +130,25 @@ export const GITLAB_ISSUE_QUERIES = {
    * Fetches merge requests related to the issue
    */
   RELATED_MRS: `
-    query GetIssueRelatedMRs($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
-          id
-          relatedMergeRequests {
-            nodes {
+    query GetIssueRelatedMRs($id: IssueID!) {
+      issue(id: $id) {
+        id
+        relatedMergeRequests {
+          nodes {
+            id
+            iid
+            title
+            state
+            mergedAt
+            createdAt
+            updatedAt
+            author {
               id
-              iid
-              title
-              state
-              mergedAt
-              createdAt
-              updatedAt
-              webUrl
-              author {
-                id
-                username
-                name
-              }
-            }
-            count
-          }
-          closingMergeRequests {
-            nodes {
-              id
-              iid
-              title
-              state
-              webUrl
+              username
+              name
             }
           }
+          count
         }
       }
     }
@@ -187,40 +159,17 @@ export const GITLAB_ISSUE_QUERIES = {
    * Fetches linked issues (blocks, blocked by, related)
    */
   ISSUE_LINKS: `
-    query GetIssueLinks($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
-          id
-          blockedByIssues {
-            nodes {
-              id
-              iid
-              title
-              state
-              webUrl
-            }
-            count
+    query GetIssueLinks($id: IssueID!) {
+      issue(id: $id) {
+        id
+        blockedByIssues {
+          nodes {
+            id
+            iid
+            title
+            state
           }
-          blockingIssues {
-            nodes {
-              id
-              iid
-              title
-              state
-              webUrl
-            }
-            count
-          }
-          relatedIssues {
-            nodes {
-              id
-              iid
-              title
-              state
-              webUrl
-            }
-            count
-          }
+          count
         }
       }
     }
@@ -231,32 +180,30 @@ export const GITLAB_ISSUE_QUERIES = {
    * Fetches time estimates and time spent
    */
   TIME_TRACKING: `
-    query GetIssueTimeTracking($ids: [ID!]!) {
-      issues(ids: $ids) {
-        nodes {
-          id
-          timeEstimate
-          totalTimeSpent
-          humanTimeEstimate
-          humanTotalTimeSpent
-          timelogs {
-            nodes {
+    query GetIssueTimeTracking($id: IssueID!) {
+      issue(id: $id) {
+        id
+        timeEstimate
+        totalTimeSpent
+        humanTimeEstimate
+        humanTotalTimeSpent
+        timelogs {
+          nodes {
+            id
+            timeSpent
+            spentAt
+            summary
+            note {
               id
-              timeSpent
-              spentAt
-              summary
-              note {
-                id
-                body
-              }
-              user {
-                id
-                username
-                name
-              }
+              body
             }
-            count
+            user {
+              id
+              username
+              name
+            }
           }
+          count
         }
       }
     }
@@ -268,7 +215,7 @@ export const GITLAB_ISSUE_QUERIES = {
    * Can be filtered by project or other criteria
    */
   SIMPLE_LIST: `
-    query GetSimpleIssueList($first: Int!, $after: String, $projectPath: ID) {
+    query GetSimpleIssueList($first: Int!, $after: String, $projectPath: ID!) {
       project(fullPath: $projectPath) {
         issues(first: $first, after: $after) {
           nodes {

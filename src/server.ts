@@ -118,13 +118,97 @@ class Server {
       }
     });
 
-    // Trigger manual user sync
+    // Trigger manual syncs
     this.app.post('/jobs/trigger/user-sync', async (req, res) => {
       try {
         await jobManager.triggerUserSync();
         res.json({
           success: true,
           message: 'User sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/project-sync', async (req, res) => {
+      try {
+        await jobManager.triggerProjectSync();
+        res.json({
+          success: true,
+          message: 'Project sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/merge-request-sync', async (req, res) => {
+      try {
+        await jobManager.triggerMergeRequestSync();
+        res.json({
+          success: true,
+          message: 'Merge request sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/issue-sync', async (req, res) => {
+      try {
+        await jobManager.triggerIssueSync();
+        res.json({
+          success: true,
+          message: 'Issue sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/namespace-sync', async (req, res) => {
+      try {
+        await jobManager.triggerNamespaceSync();
+        res.json({
+          success: true,
+          message: 'Namespace sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/all', async (req, res) => {
+      try {
+        await jobManager.triggerUserSync();
+        await jobManager.triggerProjectSync();
+        await jobManager.triggerMergeRequestSync();
+        await jobManager.triggerIssueSync();
+        await jobManager.triggerNamespaceSync();
+        res.json({
+          success: true,
+          message: 'All syncs triggered successfully',
           timestamp: new Date().toISOString(),
         });
       } catch (error: any) {
@@ -194,10 +278,19 @@ class Server {
           health: '/health',
           jobs: {
             status: '/jobs/status',
-            triggerUserSync: '/jobs/trigger/user-sync (POST)',
-            pause: '/jobs/pause (POST)',
-            resume: '/jobs/resume (POST)',
-            cleanup: '/jobs/cleanup (POST)',
+            triggers: {
+              userSync: '/jobs/trigger/user-sync (POST)',
+              projectSync: '/jobs/trigger/project-sync (POST)',
+              mergeRequestSync: '/jobs/trigger/merge-request-sync (POST)',
+              issueSync: '/jobs/trigger/issue-sync (POST)',
+              namespaceSync: '/jobs/trigger/namespace-sync (POST)',
+              all: '/jobs/trigger/all (POST)',
+            },
+            control: {
+              pause: '/jobs/pause (POST)',
+              resume: '/jobs/resume (POST)',
+              cleanup: '/jobs/cleanup (POST)',
+            },
           },
         },
         documentation: 'Visit /graphql for GraphQL Playground (development only)',
@@ -226,6 +319,16 @@ class Server {
     }
   }
 
+  private async initializeMergeRequestJobOnly(): Promise<void> {
+    try {
+      await jobManager.initializeMergeRequestSyncOnly();
+      logger.info('Merge request sync job initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize merge request sync job:', error);
+      // Don't exit - jobs are optional, API should still work
+    }
+  }
+
   public async start(): Promise<void> {
     try {
       const config = environment.get();
@@ -242,8 +345,8 @@ class Server {
       // Setup routes
       this.setupRoutes();
 
-      // Initialize background jobs
-      // await this.initializeJobs();
+      // Initialize all sync jobs
+      await this.initializeJobs();
 
       // Start listening
       const server = this.app.listen(config.port, () => {

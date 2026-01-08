@@ -15,11 +15,108 @@ class MilestoneSyncProcessor extends BaseSyncProcessor<IMilestone> {
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const projectPath = (options as MilestoneSyncJobData).projectPath;
-    return await gitlabMilestoneProcessor.fetchSimpleMilestones(options.batchSize || 100, projectPath);
+
+    if (projectPath) {
+      return await gitlabMilestoneProcessor.fetchSimpleMilestones(options.batchSize || 100, projectPath);
+    }
+
+    // No projectPath - fetch milestones from all active projects
+    logger.info('Fetching milestones from all active projects');
+    const Project = require('../../../models/Project').Project;
+    const projects = await Project.find({ isActive: true })
+      .select('pathWithNamespace')
+      .lean();
+
+    logger.info('Found active projects for milestone sync', { count: projects.length });
+
+    const allMilestones: any[] = [];
+    for (const project of projects) {
+      try {
+        const milestones = await gitlabMilestoneProcessor.fetchSimpleMilestones(
+          options.batchSize || 100,
+          project.pathWithNamespace
+        );
+        allMilestones.push(...milestones);
+      } catch (error) {
+        logger.warn('Failed to fetch milestones for project', {
+          projectPath: project.pathWithNamespace,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    logger.info('Fetched milestones from all projects', { totalMilestones: allMilestones.length });
+    return allMilestones;
   }
 
-  async fetchEntityData(ids: number[]): Promise<any> {
-    return await gitlabMilestoneProcessor.fetchMilestoneData(ids);
+  async fetchEntityData(ids: number[], projectPath?: string): Promise<any> {
+    return await gitlabMilestoneProcessor.fetchMilestoneData(ids, projectPath);
+  }
+
+  /**
+   * Override processEntity to pass projectPath parameter
+   */
+  protected async processEntity(
+    entity: any,
+    categorySyncResults: { [category: string]: import('../base/baseSyncProcessor').CategorySyncResult }
+  ): Promise<{ created: boolean; updated: boolean; skipped: boolean }> {
+    const gitlabId = this.extractGitLabId(entity);
+    const projectPath = entity.projectPath;
+
+    if (!projectPath) {
+      logger.error('Milestone entity missing projectPath', { gitlabId });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const existingEntity = await this.getExisting(gitlabId);
+
+    if (existingEntity) {
+      if (this.shouldSkipSync(existingEntity)) {
+        logger.debug(`Skipping ${this.entityName} sync`, {
+          entityId: gitlabId,
+          reason: 'Manual or non-syncable entity'
+        });
+        return { created: false, updated: false, skipped: true };
+      }
+
+      const detailedData = await this.fetchEntityData([gitlabId], projectPath);
+
+      if (!detailedData || !detailedData.data) {
+        logger.warn(`No detailed data found for ${this.entityName}`, { gitlabId, projectPath });
+        return { created: false, updated: false, skipped: true };
+      }
+
+      const mappedData = this.mapToModel(detailedData.data);
+      this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
+      const savedEntity = await this.updateModel(mappedData);
+
+      if (savedEntity) {
+        logger.debug(`Updated ${this.entityName}`, { gitlabId, projectPath });
+        return { created: false, updated: true, skipped: false };
+      }
+
+      logger.warn(`Failed to update ${this.entityName}`, { gitlabId, projectPath });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const detailedData = await this.fetchEntityData([gitlabId], projectPath);
+
+    if (!detailedData || !detailedData.data) {
+      logger.warn(`No detailed data found for new ${this.entityName}`, { gitlabId, projectPath });
+      return { created: false, updated: false, skipped: true };
+    }
+
+    const mappedData = this.mapToModel(detailedData.data);
+    this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
+    const savedEntity = await this.updateModel(mappedData);
+
+    if (savedEntity) {
+      logger.debug(`Created ${this.entityName}`, { gitlabId, projectPath });
+      return { created: true, updated: false, skipped: false };
+    }
+
+    logger.warn(`Failed to create ${this.entityName}`, { gitlabId, projectPath });
+    return { created: false, updated: false, skipped: true };
   }
 
   async getExisting(gitlabId: number): Promise<any> {

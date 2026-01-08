@@ -5,29 +5,31 @@
 
 export const GITLAB_COMMIT_QUERIES = {
   CORE_DATA: `
-    query GetCommitCoreData($ids: [ID!]!) {
-      commits(ids: $ids) {
-        nodes {
-          id
-          sha
-          shortId
-          title
-          fullTitle
-          message
-          authoredDate
-          committedDate
-          webUrl
-          author {
+    query GetCommitCoreData($projectPath: ID!, $sha: String!) {
+      project(fullPath: $projectPath) {
+        repository {
+          commit(sha: $sha) {
             id
-            username
-            name
-            avatarUrl
-          }
-          committer {
-            id
-            username
-            name
-            avatarUrl
+            sha
+            shortId
+            title
+            fullTitle
+            message
+            authoredDate
+            committedDate
+            webUrl
+            author {
+              id
+              username
+              name
+              avatarUrl
+            }
+            committer {
+              id
+              username
+              name
+              avatarUrl
+            }
           }
         }
       }
@@ -35,14 +37,16 @@ export const GITLAB_COMMIT_QUERIES = {
   `,
 
   DIFF_STATS: `
-    query GetCommitDiffStats($ids: [ID!]!) {
-      commits(ids: $ids) {
-        nodes {
-          id
-          stats {
-            additions
-            deletions
-            total
+    query GetCommitDiffStats($projectPath: ID!, $sha: String!) {
+      project(fullPath: $projectPath) {
+        repository {
+          commit(sha: $sha) {
+            id
+            stats {
+              additions
+              deletions
+              total
+            }
           }
         }
       }
@@ -50,15 +54,17 @@ export const GITLAB_COMMIT_QUERIES = {
   `,
 
   REFERENCES: `
-    query GetCommitReferences($ids: [ID!]!) {
-      commits(ids: $ids) {
-        nodes {
-          id
-          pipelines {
-            nodes {
-              id
-              iid
-              status
+    query GetCommitReferences($projectPath: ID!, $sha: String!) {
+      project(fullPath: $projectPath) {
+        repository {
+          commit(sha: $sha) {
+            id
+            pipelines {
+              nodes {
+                id
+                iid
+                status
+              }
             }
           }
         }
@@ -67,13 +73,15 @@ export const GITLAB_COMMIT_QUERIES = {
   `,
 
   SIGNATURES: `
-    query GetCommitSignatures($ids: [ID!]!) {
-      commits(ids: $ids) {
-        nodes {
-          id
-          signature {
-            gpgKeyId
-            verificationStatus
+    query GetCommitSignatures($projectPath: ID!, $sha: String!) {
+      project(fullPath: $projectPath) {
+        repository {
+          commit(sha: $sha) {
+            id
+            signature {
+              gpgKeyId
+              verificationStatus
+            }
           }
         }
       }
@@ -88,6 +96,9 @@ export const GITLAB_COMMIT_QUERIES = {
             lastCommit {
               id
               sha
+              shortId
+              title
+              authoredDate
             }
           }
         }

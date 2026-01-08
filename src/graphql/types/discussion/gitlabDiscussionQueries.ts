@@ -1,22 +1,25 @@
 /**
  * GitLab Discussion GraphQL Queries
- * 2 categories: CORE_DATA, NOTES
+ * Note: Discussions must be queried in context (MR or Issue)
+ * These queries use merge request context as an example
  */
 
 export const GITLAB_DISCUSSION_QUERIES = {
   CORE_DATA: `
-    query GetDiscussionCoreData($ids: [ID!]!) {
-      discussions(ids: $ids) {
-        nodes {
-          id
-          createdAt
-          resolved
-          resolvable
-          resolvedAt
-          resolvedBy {
+    query GetDiscussionCoreData($mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        discussions {
+          nodes {
             id
-            username
-            name
+            createdAt
+            resolved
+            resolvable
+            resolvedAt
+            resolvedBy {
+              id
+              username
+              name
+            }
           }
         }
       }
@@ -24,21 +27,23 @@ export const GITLAB_DISCUSSION_QUERIES = {
   `,
 
   NOTES: `
-    query GetDiscussionNotes($ids: [ID!]!) {
-      discussions(ids: $ids) {
-        nodes {
-          id
-          notes {
-            nodes {
-              id
-              body
-              createdAt
-              updatedAt
-              system
-              author {
+    query GetDiscussionNotes($mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        discussions {
+          nodes {
+            id
+            notes {
+              nodes {
                 id
-                username
-                name
+                body
+                createdAt
+                updatedAt
+                system
+                author {
+                  id
+                  username
+                  name
+                }
               }
             }
           }
@@ -48,15 +53,17 @@ export const GITLAB_DISCUSSION_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleDiscussionList($first: Int!, $after: String) {
-      discussions(first: $first, after: $after) {
-        nodes {
-          id
-          createdAt
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
+    query GetSimpleDiscussionList($first: Int!, $after: String, $mergeRequestId: MergeRequestID!) {
+      mergeRequest(id: $mergeRequestId) {
+        discussions(first: $first, after: $after) {
+          nodes {
+            id
+            createdAt
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }

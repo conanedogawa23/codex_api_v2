@@ -24,7 +24,12 @@ export class GitlabPipelineProcessor {
 
         const pipelinesData: any = (result as any)?.data?.project?.pipelines;
         if (pipelinesData?.nodes) {
-          allPipelines.push(...pipelinesData.nodes);
+          // Add projectPath to each pipeline for later use
+          const pipelinesWithPath = pipelinesData.nodes.map((p: any) => ({
+            ...p,
+            projectPath
+          }));
+          allPipelines.push(...pipelinesWithPath);
           hasNextPage = pipelinesData.pageInfo?.hasNextPage || false;
           after = pipelinesData.pageInfo?.endCursor || null;
         } else {
@@ -42,44 +47,64 @@ export class GitlabPipelineProcessor {
     }
   }
 
-  async fetchPipelineData(pipelineIds: number[]): Promise<any> {
-    const gitlabIds = pipelineIds.map(id => `gid://gitlab/Ci::Pipeline/${id}`);
+  async fetchPipelineData(pipelineIds: number[], projectPath?: string, iid?: number): Promise<any> {
+    if (!projectPath || !iid) {
+      logger.error('fetchPipelineData requires both projectPath and iid parameters');
+      return { data: { pipelines: [] } };
+    }
+
+    logger.debug('Fetching comprehensive pipeline data', { projectPath, iid });
 
     try {
       const results = await Promise.allSettled([
-        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.CORE_DATA, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.JOBS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.TEST_REPORTS, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.VARIABLES, { ids: gitlabIds }),
-        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.ARTIFACTS, { ids: gitlabIds })
+        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.CORE_DATA, { projectPath, iid: String(iid) }),
+        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.JOBS, { projectPath, iid: String(iid) }),
+        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.TEST_REPORTS, { projectPath, iid: String(iid) }),
+        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.VARIABLES, { projectPath, iid: String(iid) }),
+        gitlabApiClient.executeQuery(GITLAB_PIPELINE_QUERIES.ARTIFACTS, { projectPath, iid: String(iid) })
       ]);
 
       const [coreData, jobs, testReports, variables, artifacts] = results.map((result, index) => {
         if (result.status === 'rejected') {
-          logger.error(`Failed to fetch pipeline category ${index}`, { error: result.reason });
+          logger.error(`Failed to fetch pipeline category ${index}`, { 
+            error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
+            projectPath,
+            iid
+          });
           return null;
         }
         return result.value;
       });
 
-      const corePipelines = coreData?.data?.ciPipelines?.nodes || [];
-      const jobsPipelines = jobs?.data?.ciPipelines?.nodes || [];
-      const testPipelines = testReports?.data?.ciPipelines?.nodes || [];
-      const varsPipelines = variables?.data?.ciPipelines?.nodes || [];
-      const artifactsPipelines = artifacts?.data?.ciPipelines?.nodes || [];
+      // Extract single pipeline from each category
+      const corePipeline = coreData?.data?.project?.pipeline || null;
+      const jobsData = jobs?.data?.project?.pipeline || null;
+      const testData = testReports?.data?.project?.pipeline || null;
+      const varsData = variables?.data?.project?.pipeline || null;
+      const artifactsData = artifacts?.data?.project?.pipeline || null;
 
-      const mergedPipelines = corePipelines.map((pipeline: any) => ({
-        ...pipeline,
-        jobs: jobsPipelines.find((p: any) => p.id === pipeline.id)?.jobs || { nodes: [], count: 0 },
-        testReportSummary: testPipelines.find((p: any) => p.id === pipeline.id)?.testReportSummary || null,
-        variables: varsPipelines.find((p: any) => p.id === pipeline.id)?.variables || { nodes: [] },
-        artifacts: artifactsPipelines.find((p: any) => p.id === pipeline.id)?.jobs?.nodes?.flatMap((j: any) => j.artifacts?.nodes || []) || []
-      }));
+      if (!corePipeline) {
+        logger.warn('No core pipeline data available', { projectPath, iid });
+        return { data: { pipelines: [] } };
+      }
 
-      return { data: { pipelines: mergedPipelines } };
+      // Merge all data into one pipeline object
+      const mergedPipeline = {
+        ...corePipeline,
+        jobs: jobsData?.jobs || { nodes: [], count: 0 },
+        testReportSummary: testData?.testReportSummary || null,
+        variables: varsData?.variables || { nodes: [] },
+        artifacts: artifactsData?.jobs?.nodes?.flatMap((j: any) => j.artifacts?.nodes || []) || []
+      };
+
+      logger.debug('Successfully merged pipeline data', { projectPath, iid });
+
+      return { data: { pipelines: [mergedPipeline] } };
     } catch (error: unknown) {
       logger.error('Error fetching pipeline data', {
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        projectPath,
+        iid
       });
       throw error;
     }
