@@ -28,6 +28,7 @@ import { departmentModule } from './modules/department/department.module';
 import { attachmentModule } from './modules/attachment/attachment.module';
 import { wikiPageModule } from './modules/wikiPage/wikiPage.module';
 import { draftNoteModule } from './modules/draftNote/draftNote.module';
+import { analyticsModule } from './modules/analytics/analytics.module';
 
 export const application = createApplication({
   modules: [
@@ -59,6 +60,7 @@ export const application = createApplication({
     attachmentModule,
     wikiPageModule,
     draftNoteModule,
+    analyticsModule,
   ],
 });
 
