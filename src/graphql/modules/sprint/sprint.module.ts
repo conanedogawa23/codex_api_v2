@@ -53,6 +53,13 @@ export const sprintModule = createModule({
       percentage: Int!
     }
 
+    enum SprintStatus {
+      PLANNED
+      ACTIVE
+      COMPLETED
+      CANCELLED
+    }
+
     input SprintAssigneeInput {
       id: String!
       name: String!
@@ -86,8 +93,8 @@ export const sprintModule = createModule({
     extend type Query {
       sprint(id: ID!): Sprint
       sprints(limit: Int = 20, offset: Int = 0): [Sprint!]!
-      sprintsBySprintRepo(sprintRepoId: ID!, status: String, limit: Int = 20): [Sprint!]!
-      sprintsByAssignee(userId: ID!, status: String, limit: Int = 20): [Sprint!]!
+      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
       activeSprints(sprintRepoId: ID): [Sprint!]!
     }
 
@@ -241,7 +248,8 @@ export const sprintModule = createModule({
           };
           
           if (status) {
-            filter.status = status;
+            // Convert GraphQL enum (PLANNED, ACTIVE, etc.) to lowercase for database query
+            filter.status = status.toLowerCase();
           }
 
           const results = await sprintsCollection
@@ -265,7 +273,8 @@ export const sprintModule = createModule({
           // Note: assignees.id is stored as string in the database, no ObjectId conversion needed
           const filter: any = { 'assignees.id': userId, isActive: true };
           if (status) {
-            filter.status = status; // Use status as-is (supports Zoho user IDs)
+            // Convert GraphQL enum (PLANNED, ACTIVE, etc.) to lowercase for database query
+            filter.status = status.toLowerCase();
           }
 
           return await Sprint.find(filter)
