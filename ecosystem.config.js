@@ -49,28 +49,6 @@ module.exports = {
       // Advanced features
       vizion: true,
       post_update: ['npm install', 'npm run build'],
-    },
-    {
-      name: 'codex-api-v2-dev',
-      script: './src/server.ts',
-      interpreter: 'node',
-      interpreter_args: '-r ts-node/register',
-      instances: 1,
-      exec_mode: 'fork',
-      watch: ['src'],
-      ignore_watch: ['node_modules', 'logs', 'dist', '*.log'],
-      watch_delay: 1000,
-      env: {
-        NODE_ENV: 'development',
-        PORT: 4000,
-        GRAPHQL_PLAYGROUND: true,
-        GRAPHQL_INTROSPECTION: true,
-        LOG_LEVEL: 'debug',
-      },
-      error_file: './logs/pm2/dev-err.log',
-      out_file: './logs/pm2/dev-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      autorestart: true,
-    },
+    }
   ],
 };
