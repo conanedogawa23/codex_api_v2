@@ -65,7 +65,26 @@ export const departmentModule = createModule({
       actualUsers: Int!
     }
 
+    input CreateDepartmentInput {
+      name: String!
+      description: String
+      head: DepartmentHeadInput
+      budget: Float
+      location: String
+    }
+
+    input UpdateDepartmentInput {
+      name: String
+      description: String
+      head: DepartmentHeadInput
+      budget: Float
+      location: String
+      isActive: Boolean
+    }
+
     extend type Mutation {
+      createDepartment(input: CreateDepartmentInput!): Department!
+      updateDepartment(id: ID!, input: UpdateDepartmentInput!): Department!
       addMemberToDepartment(departmentId: ID!, userId: String!): Department!
       removeMemberFromDepartment(departmentId: ID!, userId: String!): Department!
       addProjectToDepartment(departmentId: ID!, projectId: String!): Department!
@@ -187,6 +206,64 @@ export const departmentModule = createModule({
     },
 
     Mutation: {
+      updateDepartment: async (_: any, { id, input }: { id: string; input: { name?: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string; isActive?: boolean } }) => {
+        logger.info('Updating department', { id, fields: Object.keys(input) });
+
+        const department = await Department.findById(id);
+        if (!department) {
+          throw new AppError(`Department with ID ${id} not found`, 404);
+        }
+
+        // Check for duplicate name if renaming
+        if (input.name && input.name !== department.name) {
+          const existing = await Department.findOne({ name: input.name, _id: { $ne: id } }).lean();
+          if (existing) {
+            throw new AppError(`Department with name "${input.name}" already exists`, 400);
+          }
+        }
+
+        // Apply updates for provided fields only
+        if (input.name !== undefined) department.name = input.name;
+        if (input.description !== undefined) department.description = input.description;
+        if (input.head !== undefined) department.head = input.head;
+        if (input.budget !== undefined) department.budget = input.budget;
+        if (input.location !== undefined) department.location = input.location;
+        if (input.isActive !== undefined) department.isActive = input.isActive;
+
+        await department.save();
+
+        const updated = await Department.findById(id).lean();
+        logger.info('Department updated successfully', { id, name: updated?.name });
+        return updated!;
+      },
+
+      createDepartment: async (_: any, { input }: { input: { name: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string } }) => {
+        logger.info('Creating new department', { name: input.name });
+
+        // Check for duplicate name
+        const existing = await Department.findOne({ name: input.name }).lean();
+        if (existing) {
+          throw new AppError(`Department with name "${input.name}" already exists`, 400);
+        }
+
+        const department = new Department({
+          name: input.name,
+          description: input.description || '',
+          head: input.head || undefined,
+          budget: input.budget || 0,
+          location: input.location || '',
+          members: [],
+          projects: [],
+          isActive: true,
+        });
+
+        await department.save();
+
+        const created = await Department.findById(department._id).lean();
+        logger.info('Department created successfully', { id: department._id, name: input.name });
+        return created!;
+      },
+
       addMemberToDepartment: async (_: any, { departmentId, userId }: { departmentId: string; userId: string }) => {
         logger.info('Adding member to department', { departmentId, userId });
         
