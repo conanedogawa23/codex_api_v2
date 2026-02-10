@@ -199,6 +199,22 @@ class Server {
       }
     });
 
+    this.app.post('/jobs/trigger/pipeline-sync', async (req, res) => {
+      try {
+        await jobManager.triggerPipelineSync();
+        res.json({
+          success: true,
+          message: 'Pipeline sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
     this.app.post('/jobs/trigger/all', async (req, res) => {
       try {
         await jobManager.triggerUserSync();
@@ -206,6 +222,7 @@ class Server {
         await jobManager.triggerMergeRequestSync();
         await jobManager.triggerIssueSync();
         await jobManager.triggerNamespaceSync();
+        await jobManager.triggerPipelineSync();
         res.json({
           success: true,
           message: 'All syncs triggered successfully',
@@ -284,6 +301,7 @@ class Server {
               mergeRequestSync: '/jobs/trigger/merge-request-sync (POST)',
               issueSync: '/jobs/trigger/issue-sync (POST)',
               namespaceSync: '/jobs/trigger/namespace-sync (POST)',
+              pipelineSync: '/jobs/trigger/pipeline-sync (POST)',
               all: '/jobs/trigger/all (POST)',
             },
             control: {
@@ -319,16 +337,6 @@ class Server {
     }
   }
 
-  private async initializeMergeRequestJobOnly(): Promise<void> {
-    try {
-      await jobManager.initializeMergeRequestSyncOnly();
-      logger.info('Merge request sync job initialized successfully');
-    } catch (error) {
-      logger.error('Failed to initialize merge request sync job:', error);
-      // Don't exit - jobs are optional, API should still work
-    }
-  }
-
   public async start(): Promise<void> {
     try {
       const config = environment.get();
@@ -346,7 +354,7 @@ class Server {
       this.setupRoutes();
 
       // Initialize all sync jobs
-      await this.initializeJobs();
+      // await this.initializeJobs();
 
       // Start listening
       const server = this.app.listen(config.port, () => {

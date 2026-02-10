@@ -2,9 +2,11 @@ import { createModule, gql } from 'graphql-modules';
 import { Project } from '../../../models/Project';
 import { Namespace } from '../../../models/Namespace';
 import { Task } from '../../../models/Task';
+import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { gitlabApi } from '../../../utils/gitlabApi';
+import { isAdmin, getAccessibleProjectIds } from '../../../utils/rbac';
 
 export const projectModule = createModule({
   id: 'project',
@@ -165,8 +167,11 @@ export const projectModule = createModule({
         category: String
         limit: Int = 20
         offset: Int = 0
+        userId: ID
+        userRole: String
       ): [Project!]!
-      projectsByNamespace(namespacePath: String!, limit: Int = 20): [Project!]!
+      projectsByNamespace(namespacePath: String!, limit: Int = 20, userId: ID, userRole: String): [Project!]!
+      projectsByDepartment(department: String!, userId: ID, userRole: String): [Project!]!
     }
 
     extend type Mutation {
@@ -358,20 +363,55 @@ export const projectModule = createModule({
 
       projects: async (
         _: any,
-        { status, priority, department, category, limit = 20, offset = 0 }: any
+        { status, priority, department, category, limit = 20, offset = 0, userId, userRole }: any
       ) => {
         const filter: any = { isActive: true };
+        
+        logger.info('Projects query received', { 
+          userId, 
+          userRole, 
+          status, 
+          department, 
+          category 
+        });
+        
+        // Apply role-based filtering using user.projects[] -> gitlabIds
+        if (userId && userRole) {
+          const result = await getAccessibleProjectIds(userId, userRole);
+          
+          if (!result.isAdminUser) {
+            if (result.projectIds.length === 0) {
+              logger.info('Non-admin user has no accessible projects', { userId, userRole });
+              return [];
+            }
+            filter._id = { $in: result.projectIds };
+            logger.info('Applying user-based project filter', { 
+              userId, 
+              userRole, 
+              accessibleCount: result.projectIds.length 
+            });
+          } else {
+            logger.info('Admin user detected - no project filtering applied', { userId, userRole });
+          }
+        } else {
+          logger.warn('Missing userId or userRole - returning all projects', { userId, userRole });
+        }
+        
         // Convert GraphQL enums to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (priority) filter.priority = priority.toLowerCase();
         if (department) filter.department = department;
         if (category) filter.category = category;
 
-        return await Project.find(filter)
+        const projects = await Project.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ lastActivityAt: -1 })
           .lean();
+
+        logger.info('Projects query completed', { count: projects.length });
+
+        return projects;
       },
 
       projectsByNamespace: async (
@@ -385,6 +425,61 @@ export const projectModule = createModule({
           .limit(limit)
           .sort({ lastActivityAt: -1 })
           .lean();
+      },
+
+      projectsByDepartment: async (
+        _: any,
+        { department, userId, userRole }: { department: string; userId?: string; userRole?: string }
+      ) => {
+        logger.info('Fetching projects by department', { department, userId, userRole });
+        
+        // Get the department document
+        const dept = await Department.findOne({ name: department });
+        
+        if (!dept || !dept.projects || dept.projects.length === 0) {
+          logger.info('No projects found for department', { department });
+          return [];
+        }
+        
+        // Convert project gitlabId strings to numbers
+        const gitlabIds = dept.projects
+          .map((id: string) => parseInt(id))
+          .filter((id: number) => !isNaN(id));
+        
+        if (gitlabIds.length === 0) {
+          return [];
+        }
+        
+        // Build filter
+        const filter: any = {
+          gitlabId: { $in: gitlabIds },
+          isActive: true,
+        };
+        
+        // Apply role-based filtering using user.projects[] -> gitlabIds
+        if (userId && userRole) {
+          const result = await getAccessibleProjectIds(userId, userRole);
+          if (!result.isAdminUser) {
+            if (result.projectIds.length === 0) {
+              logger.info('Non-admin user has no accessible projects for department query', { userId });
+              return [];
+            }
+            filter._id = { $in: result.projectIds };
+            logger.info('Applying user-based filter for department query', { userId, userRole, department });
+          }
+        }
+        
+        // Query projects by gitlabId
+        const projects = await Project.find(filter)
+          .sort({ lastActivityAt: -1 })
+          .lean();
+        
+        logger.info('Found projects for department', { 
+          department, 
+          projectCount: projects.length 
+        });
+        
+        return projects;
       },
     },
 

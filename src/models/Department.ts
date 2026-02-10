@@ -9,13 +9,14 @@ export interface IDepartment extends Document {
   gitlabId?: number;
   name: string;
   description?: string;
+  namespaceId?: string; // Link to GitLab namespace/group
   head?: {
     id: string;
     name: string;
     email: string;
   };
-  members: string[]; // User IDs
-  projects: string[]; // Project IDs
+  members: string[]; // User GitLab IDs as strings
+  projects: string[]; // Project GitLab IDs as strings
   budget?: number;
   location?: string;
   isActive: boolean;
@@ -47,17 +48,22 @@ const DepartmentSchema: Schema = new Schema({
     type: String,
     trim: true
   },
+  namespaceId: {
+    type: String,
+    index: true,
+    sparse: true
+  },
   head: {
     id: String,
     name: String,
     email: String
   },
   members: [{
-    type: String, // User IDs
+    type: String, // User GitLab IDs as strings
     ref: 'User'
   }],
   projects: [{
-    type: String, // Project IDs
+    type: String, // Project GitLab IDs as strings
     ref: 'Project'
   }],
   budget: {

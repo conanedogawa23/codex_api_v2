@@ -6,6 +6,7 @@ import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import { getAccessibleSprintRepoIds } from '../../../utils/rbac';
 
 export const sprintModule = createModule({
   id: 'sprint',
@@ -92,10 +93,10 @@ export const sprintModule = createModule({
 
     extend type Query {
       sprint(id: ID!): Sprint
-      sprints(limit: Int = 20, offset: Int = 0): [Sprint!]!
-      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      sprints(limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): [Sprint!]!
+      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20, userId: ID, userRole: String): [Sprint!]!
       sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
-      activeSprints(sprintRepoId: ID): [Sprint!]!
+      activeSprints(sprintRepoId: ID, userId: ID, userRole: String): [Sprint!]!
     }
 
     extend type Mutation {
@@ -216,24 +217,53 @@ export const sprintModule = createModule({
         }
       },
 
-      sprints: async (_: any, { limit, offset }: { limit: number; offset: number }) => {
+      sprints: async (_: any, { limit, offset, userId, userRole }: { limit: number; offset: number; userId?: string; userRole?: string }) => {
         try {
-          return await Sprint.find({ isActive: true })
+          const filter: any = { isActive: true };
+
+          // Apply role-based filtering if userId and userRole are provided
+          if (userId && userRole) {
+            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
+            
+            // If user has no access, return empty array
+            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
+              return [];
+            }
+            
+            // If not admin and has accessible repos, filter by them
+            if (accessibleSprintRepoIds.length > 0) {
+              filter.sprintRepoId = { $in: accessibleSprintRepoIds };
+            }
+            // If accessibleSprintRepoIds is empty array, user is admin - no filtering needed
+          }
+
+          return await Sprint.find(filter)
             .sort({ startDate: -1 })
             .limit(limit)
             .skip(offset)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprints', { limit, offset, error });
+          logger.error('Error fetching sprints', { limit, offset, userId, error });
           throw new AppError('Failed to fetch sprints', 500);
         }
       },
 
       sprintsBySprintRepo: async (
         _: any,
-        { sprintRepoId, status, limit }: { sprintRepoId: string; status?: string; limit: number }
+        { sprintRepoId, status, limit, userId, userRole }: { sprintRepoId: string; status?: string; limit: number; userId?: string; userRole?: string }
       ) => {
         try {
+          // Apply role-based access control
+          if (userId && userRole) {
+            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
+            
+            // Check if user has access to this specific sprint repo
+            if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(sprintRepoId)) {
+              // User doesn't have access to this sprint repo
+              return [];
+            }
+          }
+
           // Use raw MongoDB collection to bypass Mongoose schema casting
           // (sprintRepoId is defined as String in schema but stored as ObjectId in DB)
           const db = mongoose.connection.db;
@@ -260,7 +290,7 @@ export const sprintModule = createModule({
           
           return results;
         } catch (error) {
-          logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, error });
+          logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, userId, error });
           throw new AppError('Failed to fetch sprints for sprint repo', 500);
         }
       },
@@ -287,10 +317,32 @@ export const sprintModule = createModule({
         }
       },
 
-      activeSprints: async (_: any, { sprintRepoId }: { sprintRepoId?: string }) => {
+      activeSprints: async (_: any, { sprintRepoId, userId, userRole }: { sprintRepoId?: string; userId?: string; userRole?: string }) => {
         try {
           const filter: any = { status: 'active', isActive: true };
-          if (sprintRepoId) {
+
+          // Apply role-based filtering
+          if (userId && userRole) {
+            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
+            
+            // If user has no access, return empty array
+            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
+              return [];
+            }
+            
+            if (sprintRepoId) {
+              // Check if user has access to the specific sprint repo
+              if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(sprintRepoId)) {
+                return [];  // User doesn't have access
+              }
+              filter.sprintRepoId = sprintRepoId;
+            } else {
+              // Filter by accessible sprint repos if not admin
+              if (accessibleSprintRepoIds.length > 0) {
+                filter.sprintRepoId = { $in: accessibleSprintRepoIds };
+              }
+            }
+          } else if (sprintRepoId) {
             filter.sprintRepoId = sprintRepoId;
           }
 
@@ -298,7 +350,7 @@ export const sprintModule = createModule({
             .sort({ startDate: -1 })
             .lean();
         } catch (error) {
-          logger.error('Error fetching active sprints', { sprintRepoId, error });
+          logger.error('Error fetching active sprints', { sprintRepoId, userId, error });
           throw new AppError('Failed to fetch active sprints', 500);
         }
       }

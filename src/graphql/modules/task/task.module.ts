@@ -212,11 +212,11 @@ export const taskModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Task!]!
-      tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
-      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20): [TaskDetails!]!
-      tasksBySprint(sprintId: ID!, limit: Int = 100): [Task!]!
-      backlogTasks(projectId: ID!, limit: Int = 100): [Task!]!
-      backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100): [Task!]!
+      tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): TaskFilterResult!
+      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20, userId: ID, userRole: String): [TaskDetails!]!
+      tasksBySprint(sprintId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
+      backlogTasks(projectId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
+      backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
     }
 
     extend type Mutation {
@@ -348,45 +348,110 @@ export const taskModule = createModule({
         _: any,
         { projectId, status, priority, assignedTo, limit = 20, offset = 0 }: any
       ) => {
+        // Use raw collection to handle mixed ObjectId/String types in projectId and assignedTo.id
+        const db = mongoose.connection.db;
+        const tasksCollection = db.collection('tasks');
         const filter: any = { isActive: true };
-        if (projectId) filter.projectId = projectId;
+
+        // projectId is stored as both ObjectId and String in DB
+        if (projectId) {
+          filter.$and = filter.$and || [];
+          filter.$and.push({
+            $or: [
+              { projectId: projectId },
+              ...(mongoose.Types.ObjectId.isValid(projectId)
+                ? [{ projectId: new mongoose.Types.ObjectId(projectId) }]
+                : [])
+            ]
+          });
+        }
         // Convert GraphQL enum (uppercase underscore) to DB format (lowercase hyphen)
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (priority) filter.priority = priority.toLowerCase();
-        if (assignedTo) filter['assignedTo.id'] = assignedTo;
+        // assignedTo.id is stored as both ObjectId and String in DB
+        if (assignedTo) {
+          filter.$and = filter.$and || [];
+          filter.$and.push({
+            $or: [
+              { 'assignedTo.id': assignedTo },
+              ...(mongoose.Types.ObjectId.isValid(assignedTo)
+                ? [{ 'assignedTo.id': new mongoose.Types.ObjectId(assignedTo) }]
+                : [])
+            ]
+          });
+        }
 
-        return await Task.find(filter)
-          .limit(limit)
+        const results = await tasksCollection
+          .find(filter)
+          .sort({ priority: -1, dueDate: 1, _id: 1 })
           .skip(offset)
-          .sort({ priority: -1, dueDate: 1 })
-          .lean();
+          .limit(limit)
+          .toArray();
+        return results;
       },
 
       tasksByProject: async (
         _: any,
         { projectId, status, limit = 20 }: { projectId: string; status?: string; limit: number }
       ) => {
-        const filter: any = { projectId, isActive: true };
+        // Use raw collection to handle mixed ObjectId/String projectId
+        const db = mongoose.connection.db;
+        const tasksCollection = db.collection('tasks');
+        const filter: any = {
+          isActive: true,
+          $or: [
+            { projectId: projectId },
+            ...(mongoose.Types.ObjectId.isValid(projectId)
+              ? [{ projectId: new mongoose.Types.ObjectId(projectId) }]
+              : [])
+          ]
+        };
         // Convert GraphQL enum to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
 
-        return await Task.find(filter)
+        const results = await tasksCollection
+          .find(filter)
+          .sort({ priority: -1, dueDate: 1, _id: 1 })
           .limit(limit)
-          .sort({ priority: -1, dueDate: 1 })
-          .lean();
+          .toArray();
+        return results;
       },
 
       tasksByFilter: async (
         _: any,
         { filter, limit = 20, offset = 0 }: { filter: any; limit: number; offset: number }
       ) => {
+        // Use raw collection to handle mixed ObjectId/String types
+        const db = mongoose.connection.db;
+        const tasksCollection = db.collection('tasks');
         const query: any = { isActive: true };
 
-        // Apply filters (convert GraphQL uppercase format to DB lowercase hyphen format)
-        if (filter.projectId) query.projectId = filter.projectId;
+        // Handle mixed ObjectId/String projectId
+        if (filter.projectId) {
+          query.$and = query.$and || [];
+          query.$and.push({
+            $or: [
+              { projectId: filter.projectId },
+              ...(mongoose.Types.ObjectId.isValid(filter.projectId)
+                ? [{ projectId: new mongoose.Types.ObjectId(filter.projectId) }]
+                : [])
+            ]
+          });
+        }
         if (filter.status) query.status = filter.status.toLowerCase().replace(/_/g, '-');
         if (filter.priority) query.priority = filter.priority.toLowerCase();
-        if (filter.assignedTo) query['assignedTo.id'] = filter.assignedTo;
+        // Handle mixed ObjectId/String assignedTo.id
+        if (filter.assignedTo) {
+          query.$and = query.$and || [];
+          query.$and.push({
+            $or: [
+              { 'assignedTo.id': filter.assignedTo },
+              ...(mongoose.Types.ObjectId.isValid(filter.assignedTo)
+                ? [{ 'assignedTo.id': new mongoose.Types.ObjectId(filter.assignedTo) }]
+                : [])
+            ]
+          });
+        }
         if (filter.sprintId !== undefined) {
           if (filter.sprintId === null || filter.sprintId === '') {
             query.sprintId = { $exists: false };
@@ -402,22 +467,43 @@ export const taskModule = createModule({
           if (filter.dueDateTo) query.dueDate.$lte = new Date(filter.dueDateTo);
         }
 
-        // Get tasks with pagination
-        const tasks = await Task.find(query)
-          .limit(limit)
+        // Get tasks with pagination (sort before skip/limit, _id for deterministic ordering)
+        const tasks = await tasksCollection
+          .find(query)
+          .sort({ priority: -1, dueDate: 1, _id: 1 })
           .skip(offset)
-          .sort({ priority: -1, dueDate: 1 })
-          .lean();
+          .limit(limit)
+          .toArray();
 
         // Get total count for current filter
-        const totalCount = await Task.countDocuments(query);
+        const totalCount = await tasksCollection.countDocuments(query);
 
         // Calculate status summary efficiently using aggregation
         // Build base query for status summary (exclude status filter to get all counts)
         const baseQuery: any = { isActive: true };
         // Apply non-status filters for status summary (project, assignee, etc.)
-        if (filter.projectId) baseQuery.projectId = filter.projectId;
-        if (filter.assignedTo) baseQuery['assignedTo.id'] = filter.assignedTo;
+        if (filter.projectId) {
+          baseQuery.$and = baseQuery.$and || [];
+          baseQuery.$and.push({
+            $or: [
+              { projectId: filter.projectId },
+              ...(mongoose.Types.ObjectId.isValid(filter.projectId)
+                ? [{ projectId: new mongoose.Types.ObjectId(filter.projectId) }]
+                : [])
+            ]
+          });
+        }
+        if (filter.assignedTo) {
+          baseQuery.$and = baseQuery.$and || [];
+          baseQuery.$and.push({
+            $or: [
+              { 'assignedTo.id': filter.assignedTo },
+              ...(mongoose.Types.ObjectId.isValid(filter.assignedTo)
+                ? [{ 'assignedTo.id': new mongoose.Types.ObjectId(filter.assignedTo) }]
+                : [])
+            ]
+          });
+        }
         if (filter.sprintId !== undefined) {
           if (filter.sprintId === null || filter.sprintId === '') {
             baseQuery.sprintId = { $exists: false };

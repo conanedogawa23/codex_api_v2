@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { User } from '../../../models/User';
+import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
 
 export const userModule = createModule({
@@ -13,6 +14,8 @@ export const userModule = createModule({
       username: String!
       role: String!
       department: String!
+      departmentDetails: Department
+      userType: String!
       avatar: String
       webUrl: String
       joinDate: DateTime!
@@ -41,6 +44,8 @@ export const userModule = createModule({
       username: String!
       role: String!
       department: String!
+      departmentDetails: Department
+      userType: String!
       avatar: String
       webUrl: String
       joinDate: DateTime!
@@ -114,10 +119,21 @@ export const userModule = createModule({
         // DB: 'on-leave' -> GraphQL: 'ON_LEAVE'
         return parent.status?.replace(/-/g, '_').toUpperCase();
       },
+      userType: (parent: any) => parent.userType || 'human',
       joinDate: (parent: any) => parent.joinDate || parent.createdAt || new Date(),
       lastSynced: (parent: any) => parent.lastSynced || parent.createdAt || new Date(),
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
+      
+      // Resolve department details
+      departmentDetails: async (parent: any) => {
+        if (!parent.department) {
+          return null;
+        }
+        
+        const department = await Department.findOne({ name: parent.department }).lean();
+        return department;
+      },
     },
     
     OrganizationUser: {
@@ -125,10 +141,21 @@ export const userModule = createModule({
       status: (parent: any) => {
         return parent.status?.replace(/-/g, '_').toUpperCase();
       },
+      userType: (parent: any) => parent.userType || 'human',
       joinDate: (parent: any) => parent.joinDate || parent.createdAt || new Date(),
       lastSynced: (parent: any) => parent.lastSynced || parent.createdAt || new Date(),
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
+      
+      // Resolve department details
+      departmentDetails: async (parent: any) => {
+        if (!parent.department) {
+          return null;
+        }
+        
+        const department = await Department.findOne({ name: parent.department }).lean();
+        return department;
+      },
     },
     
     Query: {

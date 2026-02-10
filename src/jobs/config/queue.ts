@@ -56,6 +56,7 @@ export const projectSyncQueue = new Queue('project-sync', queueOptions);
 export const issueSyncQueue = new Queue('issue-sync', queueOptions);
 export const mergeRequestSyncQueue = new Queue('merge-request-sync', queueOptions);
 export const namespaceSyncQueue = new Queue('namespace-sync', queueOptions);
+export const pipelineSyncQueue = new Queue('pipeline-sync', queueOptions);
 
 // Queue event listeners for monitoring
 userSyncQueue.on('error', (error: Error) => {
@@ -162,6 +163,19 @@ namespaceSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
   logger.error('Namespace sync job failed', { jobId: job.id, error: error.message });
 });
 
+// Pipeline sync queue event listeners
+pipelineSyncQueue.on('error', (error: Error) => {
+  logger.error('Pipeline sync queue error', { error: error.message });
+});
+
+pipelineSyncQueue.on('completed', (job: Queue.Job, result: any) => {
+  logger.info('Pipeline sync job completed', { jobId: job.id, result });
+});
+
+pipelineSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
+  logger.error('Pipeline sync job failed', { jobId: job.id, error: error.message });
+});
+
 // Graceful shutdown
 export const closeQueues = async (): Promise<void> => {
   logger.info('Closing job queues...');
@@ -170,6 +184,7 @@ export const closeQueues = async (): Promise<void> => {
   await issueSyncQueue.close();
   await mergeRequestSyncQueue.close();
   await namespaceSyncQueue.close();
+  await pipelineSyncQueue.close();
   await redisClient.quit();
   await subscriber.quit();
   logger.info('Job queues closed successfully');

@@ -18,6 +18,7 @@ export interface IUser extends Document {
   avatar?: string;
   joinDate: Date;
   status: 'active' | 'inactive' | 'on-leave';
+  userType: 'human' | 'bot' | 'service_account' | 'deploy_token';
   skills: string[];
   assignedRepos: string[];
   projects: {
@@ -174,6 +175,13 @@ const UserSchema: Schema = new Schema({
     default: 'active',
     index: true
   },
+  userType: {
+    type: String,
+    enum: ['human', 'bot', 'service_account', 'deploy_token'],
+    default: 'human',
+    required: true,
+    index: true
+  },
   skills: [{
     type: String,
     trim: true
@@ -316,12 +324,14 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ username: 1 });
 UserSchema.index({ department: 1 });
 UserSchema.index({ status: 1 });
+UserSchema.index({ userType: 1 });
 UserSchema.index({ 'projects.id': 1 });
 UserSchema.index({ skills: 1 });
 UserSchema.index({ lastSynced: 1 });
 UserSchema.index({ userSource: 1, email: 1 });
 UserSchema.index({ userSource: 1, status: 1 });
 UserSchema.index({ canSyncFromGitlab: 1 });
+UserSchema.index({ department: 1, userType: 1 });
 
 // Virtual for full name
 UserSchema.virtual('fullName').get(function() {

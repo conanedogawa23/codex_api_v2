@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger';
-import { closeQueues, issueSyncQueue, mergeRequestSyncQueue, namespaceSyncQueue } from './config/queue';
+import { closeQueues, issueSyncQueue, mergeRequestSyncQueue, namespaceSyncQueue, pipelineSyncQueue } from './config/queue';
 import {
   initializeUserSyncScheduler,
   triggerImmediateSync,
@@ -19,9 +19,11 @@ import {
 import { IssueSyncScheduler } from './schedulers/issueSync.scheduler';
 import { MergeRequestSyncScheduler } from './schedulers/mergeRequestSync.scheduler';
 import { NamespaceSyncScheduler } from './schedulers/namespaceSync.scheduler';
+import { PipelineSyncScheduler } from './schedulers/pipelineSync.scheduler';
 import { processIssueSync } from './processors/issues/issueSync.processor';
 import { processMergeRequestSync } from './processors/mergeRequests/mergeRequestSync.processor';
 import { processNamespaceSync } from './processors/namespaces/namespaceSync.processor';
+import { processPipelineSync } from './processors/pipelines/pipelineSync.processor';
 
 /**
  * Job Manager
@@ -33,6 +35,7 @@ export class JobManager {
   private issueSyncScheduler?: IssueSyncScheduler;
   private mergeRequestSyncScheduler?: MergeRequestSyncScheduler;
   private namespaceSyncScheduler?: NamespaceSyncScheduler;
+  private pipelineSyncScheduler?: PipelineSyncScheduler;
 
   private constructor() {}
 
@@ -78,6 +81,12 @@ export class JobManager {
       namespaceSyncQueue.process('namespace-sync', processNamespaceSync);
       await this.namespaceSyncScheduler.scheduleRecurring();
       logger.info('Namespace sync scheduler initialized');
+
+      // Initialize pipeline sync scheduler
+      this.pipelineSyncScheduler = new PipelineSyncScheduler(pipelineSyncQueue);
+      pipelineSyncQueue.process('pipeline-sync', processPipelineSync);
+      await this.pipelineSyncScheduler.scheduleRecurring();
+      logger.info('Pipeline sync scheduler initialized');
 
       this.isInitialized = true;
       logger.info('Job manager initialized successfully');
@@ -236,6 +245,13 @@ export class JobManager {
    */
   public async triggerNamespaceSync(): Promise<void> {
     return this.namespaceSyncScheduler?.triggerManual();
+  }
+
+  /**
+   * Trigger manual pipeline sync
+   */
+  public async triggerPipelineSync(): Promise<void> {
+    return this.pipelineSyncScheduler?.triggerManual();
   }
 }
 
