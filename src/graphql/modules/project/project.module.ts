@@ -1,5 +1,6 @@
 import { createModule, gql } from 'graphql-modules';
 import { Project } from '../../../models/Project';
+import { User } from '../../../models/User';
 import { Namespace } from '../../../models/Namespace';
 import { Task } from '../../../models/Task';
 import { Department } from '../../../models/Department';
@@ -217,7 +218,19 @@ export const projectModule = createModule({
         return visibility.toUpperCase();
       },
       progress: (parent: any) => parent.progress || 0,
-      assignedTo: (parent: any) => parent.assignedTo || [],
+      assignedTo: async (parent: any) => {
+        const projectId = parent._id?.toString() || parent.id;
+        const members = await User.find({ 'projects.id': projectId }).lean();
+        return members.map((user: any) => {
+          const projectEntry = user.projects?.find((p: any) => p.id === projectId);
+          return {
+            id: user._id.toString(),
+            name: user.name,
+            role: projectEntry?.role || user.role || 'Member',
+            department: user.department || 'Unknown',
+          };
+        });
+      },
       tasks: (parent: any) => parent.tasks || { total: 0, completed: 0, inProgress: 0, pending: 0 },
       budget: (parent: any) => {
         // Return null if budget doesn't exist
@@ -288,7 +301,19 @@ export const projectModule = createModule({
         return visibility.toUpperCase();
       },
       progress: (parent: any) => parent.progress || 0,
-      assignedTo: (parent: any) => parent.assignedTo || [],
+      assignedTo: async (parent: any) => {
+        const projectId = parent._id?.toString() || parent.id;
+        const members = await User.find({ 'projects.id': projectId }).lean();
+        return members.map((user: any) => {
+          const projectEntry = user.projects?.find((p: any) => p.id === projectId);
+          return {
+            id: user._id.toString(),
+            name: user.name,
+            role: projectEntry?.role || user.role || 'Member',
+            department: user.department || 'Unknown',
+          };
+        });
+      },
       tasks: (parent: any) => parent.tasks || { total: 0, completed: 0, inProgress: 0, pending: 0 },
       budget: (parent: any) => {
         // Return null if budget doesn't exist
@@ -598,21 +623,46 @@ export const projectModule = createModule({
         _: any,
         { projectId, userId, userName, role, department }: any
       ) => {
-        const project = await Project.findById(projectId);
+        const project = await Project.findById(projectId).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }
-        await project.assignUser(userId, userName, role, department);
-        return await Project.findById(projectId).lean(); // Return updated project as lean object
+
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        await user.addProject(projectId, project.name, role);
+        logger.info('User assigned to project via user.projects[]', {
+          userId,
+          userName,
+          projectId,
+          projectName: project.name,
+          role,
+        });
+
+        return project;
       },
 
       unassignUserFromProject: async (_: any, { projectId, userId }: any) => {
-        const project = await Project.findById(projectId);
+        const project = await Project.findById(projectId).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }
-        await project.unassignUser(userId);
-        return await Project.findById(projectId).lean(); // Return updated project as lean object
+
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        await user.removeProject(projectId);
+        logger.info('User removed from project via user.projects[]', {
+          userId,
+          projectId,
+        });
+
+        return project;
       },
 
       deleteProject: async (_: any, { id }: { id: string }) => {
