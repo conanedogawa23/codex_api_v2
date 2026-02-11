@@ -633,11 +633,17 @@ export const projectModule = createModule({
           throw new AppError('User not found', 404);
         }
 
-        await user.addProject(projectId, project.name, role);
+        // Store as GitLab GID format for RBAC compatibility
+        const gitlabGid = project.gitlabId
+          ? `gid://gitlab/Project/${project.gitlabId}`
+          : projectId;
+
+        await user.addProject(gitlabGid, project.name, role);
         logger.info('User assigned to project via user.projects[]', {
           userId,
           userName,
           projectId,
+          gitlabGid,
           projectName: project.name,
           role,
         });
@@ -656,10 +662,16 @@ export const projectModule = createModule({
           throw new AppError('User not found', 404);
         }
 
-        await user.removeProject(projectId);
+        // Use GitLab GID format to match the stored format
+        const gitlabGid = project.gitlabId
+          ? `gid://gitlab/Project/${project.gitlabId}`
+          : projectId;
+
+        await user.removeProject(gitlabGid);
         logger.info('User removed from project via user.projects[]', {
           userId,
           projectId,
+          gitlabGid,
         });
 
         return project;
