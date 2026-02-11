@@ -247,6 +247,9 @@ ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ category: 1 });
 ProjectSchema.index({ department: 1 });
 ProjectSchema.index({ deadline: 1 });
+// Compound indexes for common query patterns (avoids in-memory sort)
+ProjectSchema.index({ isActive: 1, lastActivityAt: -1 });
+ProjectSchema.index({ isActive: 1, status: 1, lastActivityAt: -1 });
 
 // Virtual for URL-safe project path
 ProjectSchema.virtual('urlPath').get(function() {

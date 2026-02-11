@@ -405,6 +405,7 @@ export const projectModule = createModule({
         _: any,
         { status, priority, department, category, limit = 20, offset = 0, userId, userRole }: any
       ) => {
+        const startTime = Date.now();
         const filter: any = { isActive: true };
         
         logger.info('Projects query received', { 
@@ -412,12 +413,16 @@ export const projectModule = createModule({
           userRole, 
           status, 
           department, 
-          category 
+          category,
+          limit,
+          offset,
         });
         
         // Apply role-based filtering using user.projects[] -> gitlabIds
         if (userId && userRole) {
+          const rbacStart = Date.now();
           const result = await getAccessibleProjectIds(userId, userRole);
+          logger.info('RBAC check completed', { durationMs: Date.now() - rbacStart });
           
           if (!result.isAdminUser) {
             if (result.projectIds.length === 0) {
@@ -443,13 +448,22 @@ export const projectModule = createModule({
         if (department) filter.department = department;
         if (category) filter.category = category;
 
+        // Select only fields needed by the GraphQL schema to reduce payload
+        const dbStart = Date.now();
         const projects = await Project.find(filter)
+          .select('gitlabId name nameWithNamespace description defaultBranch visibility webUrl httpUrlToRepo sshUrlToRepo pathWithNamespace namespace status progress priority category department deadline tasks budget assignedTo createdAt updatedAt lastActivityAt lastSynced isActive')
           .limit(limit)
           .skip(offset)
           .sort({ lastActivityAt: -1 })
           .lean();
 
-        logger.info('Projects query completed', { count: projects.length });
+        const dbDuration = Date.now() - dbStart;
+        const totalDuration = Date.now() - startTime;
+        logger.info('Projects query completed', { 
+          count: projects.length, 
+          dbDurationMs: dbDuration,
+          totalDurationMs: totalDuration,
+        });
 
         return projects;
       },
