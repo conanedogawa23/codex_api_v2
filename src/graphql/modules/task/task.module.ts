@@ -155,7 +155,7 @@ export const taskModule = createModule({
 
     input TaskFilterInput {
       projectId: String
-      status: TaskStatus
+      status: [TaskStatus]
       priority: TaskPriority
       assignedTo: String
       sprintId: String
@@ -438,7 +438,13 @@ export const taskModule = createModule({
             ]
           });
         }
-        if (filter.status) query.status = filter.status.toLowerCase().replace(/_/g, '-');
+        if (filter.status) {
+          if (Array.isArray(filter.status)) {
+            query.status = { $in: filter.status.map((s: string) => s.toLowerCase().replace(/_/g, '-')) };
+          } else {
+            query.status = filter.status.toLowerCase().replace(/_/g, '-');
+          }
+        }
         if (filter.priority) query.priority = filter.priority.toLowerCase();
         // Handle mixed ObjectId/String assignedTo.id
         if (filter.assignedTo) {
