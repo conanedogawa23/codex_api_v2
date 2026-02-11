@@ -4,6 +4,22 @@ import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import { getAccessibleProjectIds } from '../../../utils/rbac';
+
+/**
+ * Build an array of projectId values (both String and ObjectId) for $in queries.
+ * Handles mixed ObjectId/String storage in the tasks collection.
+ */
+const buildProjectIdInValues = (projectIds: string[]): any[] => {
+  const values: any[] = [];
+  for (const pid of projectIds) {
+    values.push(pid);
+    if (mongoose.Types.ObjectId.isValid(pid)) {
+      values.push(new mongoose.Types.ObjectId(pid));
+    }
+  }
+  return values;
+};
 
 export const taskModule = createModule({
   id: 'task',
@@ -392,8 +408,19 @@ export const taskModule = createModule({
 
       tasksByProject: async (
         _: any,
-        { projectId, status, limit = 20 }: { projectId: string; status?: string; limit: number }
+        { projectId, status, limit = 20, userId, userRole }: { projectId: string; status?: string; limit: number; userId?: string; userRole?: string }
       ) => {
+        // Apply RBAC: verify user can access this project
+        if (userId && userRole) {
+          const rbacResult = await getAccessibleProjectIds(userId, userRole);
+          if (!rbacResult.isAdminUser) {
+            if (!rbacResult.projectIds.includes(projectId)) {
+              logger.info('Non-admin user denied access to project tasks', { userId, userRole, projectId });
+              return [];
+            }
+          }
+        }
+
         // Use raw collection to handle mixed ObjectId/String projectId
         const db = mongoose.connection.db;
         const tasksCollection = db.collection('tasks');
@@ -419,12 +446,30 @@ export const taskModule = createModule({
 
       tasksByFilter: async (
         _: any,
-        { filter, limit = 20, offset = 0 }: { filter: any; limit: number; offset: number }
+        { filter, limit = 20, offset = 0, userId, userRole }: { filter: any; limit: number; offset: number; userId?: string; userRole?: string }
       ) => {
         // Use raw collection to handle mixed ObjectId/String types
         const db = mongoose.connection.db;
         const tasksCollection = db.collection('tasks');
         const query: any = { isActive: true };
+
+        // Apply RBAC: restrict to accessible projects for non-admin users
+        const emptyResult = { tasks: [], totalCount: 0, statusSummary: { total: 0, completed: 0, inProgress: 0, pending: 0 } };
+        let rbacProjectFilter: any = null;
+        if (userId && userRole) {
+          const rbacResult = await getAccessibleProjectIds(userId, userRole);
+          if (!rbacResult.isAdminUser) {
+            if (rbacResult.projectIds.length === 0) {
+              logger.info('Non-admin user has no accessible projects for tasks', { userId, userRole });
+              return emptyResult;
+            }
+            const accessibleValues = buildProjectIdInValues(rbacResult.projectIds);
+            rbacProjectFilter = { projectId: { $in: accessibleValues } };
+            query.$and = query.$and || [];
+            query.$and.push(rbacProjectFilter);
+            logger.info('Applying RBAC filter to tasksByFilter', { userId, userRole, accessibleProjects: rbacResult.projectIds.length });
+          }
+        }
 
         // Handle mixed ObjectId/String projectId
         if (filter.projectId) {
@@ -487,6 +532,13 @@ export const taskModule = createModule({
         // Calculate status summary efficiently using aggregation
         // Build base query for status summary (exclude status filter to get all counts)
         const baseQuery: any = { isActive: true };
+
+        // Apply RBAC filter to baseQuery as well
+        if (rbacProjectFilter) {
+          baseQuery.$and = baseQuery.$and || [];
+          baseQuery.$and.push(rbacProjectFilter);
+        }
+
         // Apply non-status filters for status summary (project, assignee, etc.)
         if (filter.projectId) {
           baseQuery.$and = baseQuery.$and || [];
@@ -554,8 +606,22 @@ export const taskModule = createModule({
         };
       },
 
-      tasksBySprint: async (_: any, { sprintId, limit = 100 }: { sprintId: string; limit: number }) => {
+      tasksBySprint: async (_: any, { sprintId, limit = 100, userId, userRole }: { sprintId: string; limit: number; userId?: string; userRole?: string }) => {
         try {
+          // Apply RBAC: restrict to accessible projects for non-admin users
+          let rbacFilter: any = {};
+          if (userId && userRole) {
+            const rbacResult = await getAccessibleProjectIds(userId, userRole);
+            if (!rbacResult.isAdminUser) {
+              if (rbacResult.projectIds.length === 0) {
+                logger.info('Non-admin user has no accessible projects for sprint tasks', { userId, userRole });
+                return [];
+              }
+              const accessibleValues = buildProjectIdInValues(rbacResult.projectIds);
+              rbacFilter = { projectId: { $in: accessibleValues } };
+            }
+          }
+
           // Handle both ObjectId and string types for sprintId
           const sprintObjectId = mongoose.Types.ObjectId.isValid(sprintId) 
             ? new mongoose.Types.ObjectId(sprintId) 
@@ -566,7 +632,8 @@ export const taskModule = createModule({
               { sprintId: sprintId },
               { sprintId: sprintObjectId }
             ],
-            isActive: true
+            isActive: true,
+            ...rbacFilter,
           })
             .sort({ sprintOrder: 1, createdAt: 1 })
             .limit(limit)
@@ -577,8 +644,19 @@ export const taskModule = createModule({
         }
       },
 
-      backlogTasks: async (_: any, { projectId, limit = 100 }: { projectId: string; limit: number }) => {
+      backlogTasks: async (_: any, { projectId, limit = 100, userId, userRole }: { projectId: string; limit: number; userId?: string; userRole?: string }) => {
         try {
+          // Apply RBAC: verify user can access this project
+          if (userId && userRole) {
+            const rbacResult = await getAccessibleProjectIds(userId, userRole);
+            if (!rbacResult.isAdminUser) {
+              if (!rbacResult.projectIds.includes(projectId)) {
+                logger.info('Non-admin user denied access to backlog tasks', { userId, userRole, projectId });
+                return [];
+              }
+            }
+          }
+
           return await Task.find({
             projectId,
             isActive: true,
@@ -598,7 +676,7 @@ export const taskModule = createModule({
 
       backlogTasksBySprintRepo: async (
         _: any,
-        { projectId, sprintRepoId, limit = 100 }: { projectId: string; sprintRepoId: string; limit: number }
+        { projectId, sprintRepoId, limit = 100, userId, userRole }: { projectId: string; sprintRepoId: string; limit: number; userId?: string; userRole?: string }
       ) => {
         try {
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -606,6 +684,17 @@ export const taskModule = createModule({
           }
           if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
             throw new AppError('Invalid sprintRepo ID', 400);
+          }
+
+          // Apply RBAC: verify user can access this project
+          if (userId && userRole) {
+            const rbacResult = await getAccessibleProjectIds(userId, userRole);
+            if (!rbacResult.isAdminUser) {
+              if (!rbacResult.projectIds.includes(projectId)) {
+                logger.info('Non-admin user denied access to sprint repo backlog tasks', { userId, userRole, projectId });
+                return [];
+              }
+            }
           }
 
           return await Task.find({
