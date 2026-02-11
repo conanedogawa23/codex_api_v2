@@ -242,6 +242,11 @@ export const projectModule = createModule({
         return parent.budget;
       },
       namespace: async (parent: any) => {
+        // Skip DB lookup if namespace was batch-resolved upstream (e.g. by projectsWithCommitActivity)
+        if (parent._namespaceBatchResolved) {
+          return parent._namespaceBatchResolved;
+        }
+
         // If no namespace, return default
         if (!parent.namespace?.id) {
           return {
@@ -327,6 +332,11 @@ export const projectModule = createModule({
         return parent.budget;
       },
       namespace: async (parent: any) => {
+        // Skip DB lookup if namespace was batch-resolved upstream (e.g. by projectsWithCommitActivity)
+        if (parent._namespaceBatchResolved) {
+          return parent._namespaceBatchResolved;
+        }
+
         // If no namespace, return default
         if (!parent.namespace?.id) {
           return {

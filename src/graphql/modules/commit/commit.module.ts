@@ -1,6 +1,7 @@
 import { createModule, gql } from 'graphql-modules';
 import { Commit } from '../../../models/Commit';
 import { Project } from '../../../models/Project';
+import { Namespace } from '../../../models/Namespace';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
@@ -103,8 +104,12 @@ export const commitModule = createModule({
         
         try {
           // Find user by username to get their email
-          const user = await User.findOne({ username }).lean();
+          const user = await User.findOne({ username }).select('email').lean();
           const authorEmail = user?.email || username;
+          
+          // Calculate date threshold from the days parameter
+          const dateThreshold = new Date();
+          dateThreshold.setDate(dateThreshold.getDate() - days);
           
           // Apply RBAC: determine which projects the caller can access
           const projectFilter: any = { isActive: true };
@@ -121,29 +126,32 @@ export const commitModule = createModule({
             }
           }
 
-          // Get accessible active projects
-          const allProjects = await Project.find(projectFilter)
-            .sort({ lastActivityAt: -1 })
-            .lean();
-          
-          // Aggregate commits by project for this user
-          const commitActivity = await Commit.aggregate([
-            {
-              $match: {
-                $or: [
-                  { authorEmail },
-                  { authorName: username }
-                ],
-                isDeleted: false
+          // Run commit aggregation and project fetch in parallel
+          const [commitActivity, allProjects] = await Promise.all([
+            // Aggregate commits by project for this user within the date range
+            Commit.aggregate([
+              {
+                $match: {
+                  $or: [
+                    { authorEmail },
+                    { authorName: username }
+                  ],
+                  authoredDate: { $gte: dateThreshold },
+                  isDeleted: false
+                }
+              },
+              {
+                $group: {
+                  _id: '$projectId',
+                  commitCount: { $sum: 1 },
+                  lastCommitDate: { $max: '$authoredDate' }
+                }
               }
-            },
-            {
-              $group: {
-                _id: '$projectId',
-                commitCount: { $sum: 1 },
-                lastCommitDate: { $max: '$authoredDate' }
-              }
-            }
+            ]),
+            // Get accessible active projects
+            Project.find(projectFilter)
+              .sort({ lastActivityAt: -1 })
+              .lean()
           ]);
           
           // Create a map for quick lookup (Commit.projectId is a string matching project.gitlabId)
@@ -157,19 +165,50 @@ export const commitModule = createModule({
             ])
           );
           
-          // Build results for accessible projects
+          // Batch-fetch all namespaces in a single query to avoid N+1 per-project lookups
+          const namespaceIds = [...new Set(
+            allProjects
+              .map((p: any) => p.namespace?.id)
+              .filter((id: any) => id != null)
+          )];
+          
+          const namespaces = namespaceIds.length > 0
+            ? await Namespace.find({ gitlabId: { $in: namespaceIds } }).lean()
+            : [];
+          
+          const namespaceMap = new Map(
+            namespaces.map((ns: any) => [ns.gitlabId, ns])
+          );
+
+          // Helper to build resolved namespace object
+          const resolveNamespace = (project: any) => {
+            const nsId = project.namespace?.id;
+            if (!nsId) {
+              return { id: 0, name: 'Unknown', path: 'unknown', kind: 'group', fullPath: 'unknown', membersCountWithDescendants: 0, billableMembersCount: 0 };
+            }
+            const ns = namespaceMap.get(nsId);
+            if (ns) {
+              return { id: ns.gitlabId, name: ns.name, path: ns.path, kind: ns.kind, fullPath: ns.fullPath, membersCountWithDescendants: ns.membersCountWithDescendants || 0, billableMembersCount: ns.billableMembersCount || 0 };
+            }
+            return { ...project.namespace, fullPath: project.namespace.path, membersCountWithDescendants: 0, billableMembersCount: 0 };
+          };
+          
+          // Build results: attach batch-resolved namespace to skip per-project DB lookups
           const results = allProjects.map((project: any) => {
             const projectIdStr = project.gitlabId?.toString() || '';
             const activity = commitActivityMap.get(projectIdStr);
             
             return {
-              project,
+              project: {
+                ...project,
+                _namespaceBatchResolved: resolveNamespace(project)
+              },
               commitCount: activity?.commitCount || 0,
               lastCommitDate: activity?.lastCommitDate || null
             };
           });
           
-          // Sort by commit count (projects with commits first)
+          // Sort by commit count descending, then by last commit date
           results.sort((a, b) => {
             if (a.commitCount !== b.commitCount) {
               return b.commitCount - a.commitCount;
@@ -184,6 +223,7 @@ export const commitModule = createModule({
           
           logger.info('Fetched projects with commit activity', { 
             username, 
+            days,
             totalProjects: results.length,
             projectsWithCommits: results.filter(r => r.commitCount > 0).length
           });
