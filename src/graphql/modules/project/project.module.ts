@@ -7,7 +7,8 @@ import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { gitlabApi } from '../../../utils/gitlabApi';
-import { isAdmin, getAccessibleProjectIds } from '../../../utils/rbac';
+import { isAdmin, getAccessibleProjectIds, extractGitlabIdFromGid } from '../../../utils/rbac';
+import mongoose from 'mongoose';
 
 export const projectModule = createModule({
   id: 'project',
@@ -652,7 +653,21 @@ export const projectModule = createModule({
       },
 
       unassignUserFromProject: async (_: any, { projectId, userId }: any) => {
-        const project = await Project.findById(projectId).lean();
+        let project = null;
+
+        // Try MongoDB ObjectId lookup first
+        if (mongoose.Types.ObjectId.isValid(projectId)) {
+          project = await Project.findById(projectId).lean();
+        }
+
+        // If not found and projectId looks like a GID, extract gitlabId and search
+        if (!project) {
+          const gitlabId = extractGitlabIdFromGid(projectId);
+          if (gitlabId) {
+            project = await Project.findOne({ gitlabId }).lean();
+          }
+        }
+
         if (!project) {
           throw new AppError('Project not found', 404);
         }

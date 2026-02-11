@@ -68,35 +68,6 @@ export const getUserProjectGitlabIds = async (userId: string): Promise<number[]>
 };
 
 /**
- * Resolve the effective user role by fetching from the database.
- * Falls back to the client-provided role if DB lookup fails.
- * This ensures role checks use the authoritative DB value,
- * preventing client-side role spoofing.
- */
-export const resolveUserRole = async (
-  userId: string,
-  clientProvidedRole: string | undefined | null
-): Promise<string | null> => {
-  try {
-    const user = await User.findById(userId).select('role').lean();
-    if (user?.role) {
-      if (clientProvidedRole && user.role !== clientProvidedRole) {
-        logger.warn('Client-provided role differs from DB role', {
-          userId,
-          clientRole: clientProvidedRole,
-          dbRole: user.role,
-        });
-      }
-      return user.role;
-    }
-    return clientProvidedRole || null;
-  } catch (error) {
-    logger.error('Error fetching user role from DB, using client-provided role', { userId, error });
-    return clientProvidedRole || null;
-  }
-};
-
-/**
  * Result of accessible project lookup.
  * - isAdminUser: true if user is admin (no filtering needed)
  * - projectIds: MongoDB _id strings of projects the user can access
@@ -109,27 +80,18 @@ export interface AccessibleProjectsResult {
 /**
  * Get MongoDB project _ids accessible by a user.
  * Admins see all; regular users see only projects listed in their user.projects[].
- * Always fetches the user's actual role from the database for the admin check.
  */
 export const getAccessibleProjectIds = async (
   userId: string | undefined | null,
   userRole: string | undefined | null
 ): Promise<AccessibleProjectsResult> => {
-  if (!userId) {
-    logger.warn('Missing userId for project access check', { userId, userRole });
+  if (!userId || !userRole) {
+    logger.warn('Missing userId or userRole for project access check', { userId, userRole });
     return { isAdminUser: false, projectIds: [] };
   }
 
-  // Resolve the effective role from the database (authoritative source)
-  const effectiveRole = await resolveUserRole(userId, userRole);
-
-  if (!effectiveRole) {
-    logger.warn('Could not determine user role for project access check', { userId, userRole });
-    return { isAdminUser: false, projectIds: [] };
-  }
-
-  if (isAdmin(effectiveRole)) {
-    logger.info('Admin user detected, granting full project access', { userId, effectiveRole });
+  if (isAdmin(userRole)) {
+    logger.info('Admin user detected, granting full project access', { userId, userRole });
     return { isAdminUser: true, projectIds: [] };
   }
 
@@ -137,7 +99,7 @@ export const getAccessibleProjectIds = async (
     const gitlabIds = await getUserProjectGitlabIds(userId);
 
     if (gitlabIds.length === 0) {
-      logger.warn('Non-admin user has no assigned projects', { userId, effectiveRole });
+      logger.warn('Non-admin user has no assigned projects', { userId, userRole });
       return { isAdminUser: false, projectIds: [] };
     }
 
@@ -165,7 +127,6 @@ export const getAccessibleProjectIds = async (
 /**
  * Get sprint repo IDs accessible by a user.
  * Admins see all; regular users only see repos linked to their assigned projects.
- * The user's role is always resolved from the database (not the client parameter).
  *
  * Returns:
  * - Empty array [] if user is admin (no filtering needed)
@@ -176,8 +137,8 @@ export const getAccessibleSprintRepoIds = async (
   userId: string | undefined | null,
   userRole: string | undefined | null
 ): Promise<string[]> => {
-  if (!userId) {
-    logger.warn('Missing userId for sprint repo access check', { userId, userRole });
+  if (!userId || !userRole) {
+    logger.warn('Missing userId or userRole for sprint repo access check', { userId, userRole });
     return ['no-access'];
   }
 
