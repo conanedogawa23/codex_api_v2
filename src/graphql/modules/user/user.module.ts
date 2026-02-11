@@ -233,6 +233,14 @@ export const userModule = createModule({
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
       
+      // Filter out malformed project entries to prevent non-null violations
+      projects: (parent: any) => {
+        if (!parent.projects || !Array.isArray(parent.projects)) return [];
+        return parent.projects.filter(
+          (p: any) => p && p.id && p.name && p.role
+        );
+      },
+      
       // Resolve department details
       departmentDetails: async (parent: any) => {
         if (!parent.department) {
@@ -254,6 +262,14 @@ export const userModule = createModule({
       lastSynced: (parent: any) => parent.lastSynced || parent.createdAt || new Date(),
       createdAt: (parent: any) => parent.createdAt || parent.joinDate || new Date(),
       updatedAt: (parent: any) => parent.updatedAt || parent.lastSynced || parent.createdAt || new Date(),
+      
+      // Filter out malformed project entries to prevent non-null violations
+      projects: (parent: any) => {
+        if (!parent.projects || !Array.isArray(parent.projects)) return [];
+        return parent.projects.filter(
+          (p: any) => p && p.id && p.name && p.role
+        );
+      },
       
       // Resolve department details
       departmentDetails: async (parent: any) => {
