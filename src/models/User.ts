@@ -117,6 +117,50 @@ export interface IUser extends Document {
   costCenter?: string;
   employeeNumber?: string;
   
+  // User Settings & Preferences
+  settings?: {
+    notifications?: {
+      email?: boolean;
+      push?: boolean;
+      inApp?: boolean;
+      marketing?: boolean;
+      updates?: boolean;
+      teamActivity?: boolean;
+      mentions?: boolean;
+      reminders?: boolean;
+      projectUpdates?: boolean;
+      taskAssignments?: boolean;
+      deadlineReminders?: boolean;
+      desktop?: boolean;
+    };
+    display?: {
+      theme?: string;
+      density?: string;
+      iconSize?: string;
+      animations?: boolean;
+      sounds?: boolean;
+      showHelp?: boolean;
+      dashboardLayout?: string;
+      showCompleted?: boolean;
+    };
+    privacy?: {
+      showOnlineStatus?: boolean;
+      showActivity?: boolean;
+      allowDataCollection?: boolean;
+      shareUsageData?: boolean;
+      showEmail?: boolean;
+      publicProfile?: boolean;
+      showActiveStatus?: boolean;
+      shareAnalytics?: boolean;
+    };
+    integrations?: Array<{
+      name: string;
+      connected: boolean;
+      lastSynced?: string;
+    }>;
+    dismissedNotifications?: string[];
+  };
+  
   // Instance methods
   updateSyncTimestamp(): Promise<IUser>;
   addProject(projectId: string, projectName: string, role: string): Promise<IUser>;
@@ -313,7 +357,51 @@ const UserSchema: Schema = new Schema({
     email: String
   },
   costCenter: String,
-  employeeNumber: String
+  employeeNumber: String,
+
+  // User Settings & Preferences
+  settings: {
+    notifications: {
+      email: { type: Boolean, default: true },
+      push: { type: Boolean, default: true },
+      inApp: { type: Boolean, default: true },
+      marketing: { type: Boolean, default: false },
+      updates: { type: Boolean, default: true },
+      teamActivity: { type: Boolean, default: true },
+      mentions: { type: Boolean, default: true },
+      reminders: { type: Boolean, default: true },
+      projectUpdates: { type: Boolean, default: true },
+      taskAssignments: { type: Boolean, default: true },
+      deadlineReminders: { type: Boolean, default: true },
+      desktop: { type: Boolean, default: true }
+    },
+    display: {
+      theme: { type: String, default: 'system' },
+      density: { type: String, default: 'comfortable' },
+      iconSize: { type: String, default: 'medium' },
+      animations: { type: Boolean, default: true },
+      sounds: { type: Boolean, default: true },
+      showHelp: { type: Boolean, default: true },
+      dashboardLayout: { type: String, default: 'grid' },
+      showCompleted: { type: Boolean, default: true }
+    },
+    privacy: {
+      showOnlineStatus: { type: Boolean, default: true },
+      showActivity: { type: Boolean, default: true },
+      allowDataCollection: { type: Boolean, default: true },
+      shareUsageData: { type: Boolean, default: false },
+      showEmail: { type: Boolean, default: true },
+      publicProfile: { type: Boolean, default: true },
+      showActiveStatus: { type: Boolean, default: true },
+      shareAnalytics: { type: Boolean, default: false }
+    },
+    integrations: [{
+      name: String,
+      connected: { type: Boolean, default: false },
+      lastSynced: String
+    }],
+    dismissedNotifications: [{ type: String }]
+  }
 }, {
   timestamps: true,
   collection: 'users'

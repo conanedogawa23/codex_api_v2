@@ -4,6 +4,7 @@ import { Project } from '../../../models/Project';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+import { getAccessibleProjectIds } from '../../../utils/rbac';
 
 export const commitModule = createModule({
   id: 'commit',
@@ -47,7 +48,7 @@ export const commitModule = createModule({
       commits(projectId: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
       commitsByProject(projectId: String!, limit: Int = 20): [Commit!]!
       commitsByAuthor(authorEmail: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
-      projectsWithCommitActivity(username: String!, days: Int = 30): [ProjectCommitActivity!]!
+      projectsWithCommitActivity(username: String!, days: Int = 30, userId: ID, userRole: String): [ProjectCommitActivity!]!
     }
   `,
   resolvers: {
@@ -97,24 +98,35 @@ export const commitModule = createModule({
           .lean();
       },
 
-      projectsWithCommitActivity: async (_: any, { username, days = 30 }: { username: string; days: number }) => {
-        logger.info('Fetching all projects with commit activity', { username, days });
+      projectsWithCommitActivity: async (_: any, { username, days = 30, userId, userRole }: { username: string; days: number; userId?: string; userRole?: string }) => {
+        logger.info('Fetching projects with commit activity', { username, days, userId, userRole });
         
         try {
           // Find user by username to get their email
           const user = await User.findOne({ username }).lean();
           const authorEmail = user?.email || username;
           
-          // Calculate date range (optional - can be used for filtering commits)
-          const cutoffDate = new Date();
-          cutoffDate.setDate(cutoffDate.getDate() - days);
-          
-          // Get ALL active projects
-          const allProjects = await Project.find({ isActive: true })
+          // Apply RBAC: determine which projects the caller can access
+          const projectFilter: any = { isActive: true };
+
+          if (userId && userRole) {
+            const { isAdminUser, projectIds } = await getAccessibleProjectIds(userId, userRole);
+
+            if (!isAdminUser) {
+              if (projectIds.length === 0) {
+                logger.info('Non-admin user has no accessible projects', { userId });
+                return [];
+              }
+              projectFilter._id = { $in: projectIds };
+            }
+          }
+
+          // Get accessible active projects
+          const allProjects = await Project.find(projectFilter)
             .sort({ lastActivityAt: -1 })
             .lean();
           
-          // Aggregate commits by project for this user (no date filter to get all commits)
+          // Aggregate commits by project for this user
           const commitActivity = await Commit.aggregate([
             {
               $match: {
@@ -134,7 +146,7 @@ export const commitModule = createModule({
             }
           ]);
           
-          // Create a map for quick lookup
+          // Create a map for quick lookup (Commit.projectId is a string matching project.gitlabId)
           const commitActivityMap = new Map(
             commitActivity.map((activity: any) => [
               activity._id.toString(),
@@ -145,7 +157,7 @@ export const commitModule = createModule({
             ])
           );
           
-          // Build results for all projects
+          // Build results for accessible projects
           const results = allProjects.map((project: any) => {
             const projectIdStr = project.gitlabId?.toString() || '';
             const activity = commitActivityMap.get(projectIdStr);
@@ -162,7 +174,6 @@ export const commitModule = createModule({
             if (a.commitCount !== b.commitCount) {
               return b.commitCount - a.commitCount;
             }
-            // If same commit count, sort by last commit date
             if (a.lastCommitDate && b.lastCommitDate) {
               return new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
             }
@@ -171,7 +182,7 @@ export const commitModule = createModule({
             return 0;
           });
           
-          logger.info('Fetched all projects with commit activity', { 
+          logger.info('Fetched projects with commit activity', { 
             username, 
             totalProjects: results.length,
             projectsWithCommits: results.filter(r => r.commitCount > 0).length

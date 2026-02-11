@@ -23,6 +23,7 @@ export const userModule = createModule({
       skills: [String!]!
       assignedRepos: [String!]!
       projects: [UserProject!]!
+      settings: UserSettings
       lastSynced: DateTime!
       isActive: Boolean!
       source: String
@@ -53,6 +54,7 @@ export const userModule = createModule({
       skills: [String!]!
       assignedRepos: [String!]!
       projects: [UserProject!]!
+      settings: UserSettings
       lastSynced: DateTime!
       isActive: Boolean!
       source: String
@@ -73,6 +75,108 @@ export const userModule = createModule({
       id: String!
       name: String!
       role: String!
+    }
+
+    type NotificationSettings {
+      email: Boolean
+      push: Boolean
+      inApp: Boolean
+      marketing: Boolean
+      updates: Boolean
+      teamActivity: Boolean
+      mentions: Boolean
+      reminders: Boolean
+      projectUpdates: Boolean
+      taskAssignments: Boolean
+      deadlineReminders: Boolean
+      desktop: Boolean
+    }
+
+    type DisplaySettings {
+      theme: String
+      density: String
+      iconSize: String
+      animations: Boolean
+      sounds: Boolean
+      showHelp: Boolean
+      dashboardLayout: String
+      showCompleted: Boolean
+    }
+
+    type PrivacySettings {
+      showOnlineStatus: Boolean
+      showActivity: Boolean
+      allowDataCollection: Boolean
+      shareUsageData: Boolean
+      showEmail: Boolean
+      publicProfile: Boolean
+      showActiveStatus: Boolean
+      shareAnalytics: Boolean
+    }
+
+    type IntegrationConnection {
+      name: String!
+      connected: Boolean!
+      lastSynced: String
+    }
+
+    type UserSettings {
+      notifications: NotificationSettings
+      display: DisplaySettings
+      privacy: PrivacySettings
+      integrations: [IntegrationConnection!]
+      dismissedNotifications: [String!]
+    }
+
+    input NotificationSettingsInput {
+      email: Boolean
+      push: Boolean
+      inApp: Boolean
+      marketing: Boolean
+      updates: Boolean
+      teamActivity: Boolean
+      mentions: Boolean
+      reminders: Boolean
+      projectUpdates: Boolean
+      taskAssignments: Boolean
+      deadlineReminders: Boolean
+      desktop: Boolean
+    }
+
+    input DisplaySettingsInput {
+      theme: String
+      density: String
+      iconSize: String
+      animations: Boolean
+      sounds: Boolean
+      showHelp: Boolean
+      dashboardLayout: String
+      showCompleted: Boolean
+    }
+
+    input PrivacySettingsInput {
+      showOnlineStatus: Boolean
+      showActivity: Boolean
+      allowDataCollection: Boolean
+      shareUsageData: Boolean
+      showEmail: Boolean
+      publicProfile: Boolean
+      showActiveStatus: Boolean
+      shareAnalytics: Boolean
+    }
+
+    input IntegrationConnectionInput {
+      name: String!
+      connected: Boolean!
+      lastSynced: String
+    }
+
+    input UserSettingsInput {
+      notifications: NotificationSettingsInput
+      display: DisplaySettingsInput
+      privacy: PrivacySettingsInput
+      integrations: [IntegrationConnectionInput!]
+      dismissedNotifications: [String!]
     }
 
     input UpdateUserInput {
@@ -103,12 +207,16 @@ export const userModule = createModule({
       organizationUsers(filter: UserFilterInput): [OrganizationUser!]!
       userByEmail(email: String!): User
       userByGitlabId(gitlabId: Int!): User
+      userSettings(userId: ID!): UserSettings
     }
 
     extend type Mutation {
       updateUser(id: ID!, input: UpdateUserInput!): User
       addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): User
       removeUserProject(id: ID!, projectId: String!): User
+      updateUserSettings(userId: ID!, settings: UserSettingsInput!): UserSettings
+      dismissNotification(userId: ID!, notificationId: String!): UserSettings
+      dismissAllNotifications(userId: ID!, notificationIds: [String!]!): UserSettings
     }
   `,
   resolvers: {
@@ -227,6 +335,56 @@ export const userModule = createModule({
         }
         return user;
       },
+      userSettings: async (_: any, { userId }: { userId: string }) => {
+        const user = await User.findById(userId).select('settings').lean();
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+        
+        // Return default settings if none exist
+        if (!user.settings) {
+          return {
+            notifications: {
+              email: true,
+              push: true,
+              inApp: true,
+              marketing: false,
+              updates: true,
+              teamActivity: true,
+              mentions: true,
+              reminders: true,
+              projectUpdates: true,
+              taskAssignments: true,
+              deadlineReminders: true,
+              desktop: true,
+            },
+            display: {
+              theme: 'system',
+              density: 'comfortable',
+              iconSize: 'medium',
+              animations: true,
+              sounds: true,
+              showHelp: true,
+              dashboardLayout: 'grid',
+              showCompleted: true,
+            },
+            privacy: {
+              showOnlineStatus: true,
+              showActivity: true,
+              allowDataCollection: true,
+              shareUsageData: false,
+              showEmail: true,
+              publicProfile: true,
+              showActiveStatus: true,
+              shareAnalytics: false,
+            },
+            integrations: [],
+            dismissedNotifications: [],
+          };
+        }
+        
+        return user.settings;
+      },
     },
     Mutation: {
       updateUser: async (_: any, { id, input }: any) => {
@@ -255,6 +413,86 @@ export const userModule = createModule({
         }
         await user.removeProject(projectId);
         return await User.findById(id).lean(); // Return updated user as lean object
+      },
+      updateUserSettings: async (_: any, { userId, settings }: { userId: string; settings: any }) => {
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        // Deep merge settings to preserve existing nested values not included in update
+        const currentSettings = user.settings || {};
+        const updatedSettings = {
+          notifications: {
+            ...(currentSettings.notifications || {}),
+            ...(settings.notifications || {}),
+          },
+          display: {
+            ...(currentSettings.display || {}),
+            ...(settings.display || {}),
+          },
+          privacy: {
+            ...(currentSettings.privacy || {}),
+            ...(settings.privacy || {}),
+          },
+          integrations: settings.integrations !== undefined 
+            ? settings.integrations 
+            : (currentSettings.integrations || []),
+          dismissedNotifications: settings.dismissedNotifications !== undefined
+            ? settings.dismissedNotifications
+            : (currentSettings.dismissedNotifications || []),
+        };
+
+        user.settings = updatedSettings;
+        await user.save();
+
+        return updatedSettings;
+      },
+      dismissNotification: async (_: any, { userId, notificationId }: { userId: string; notificationId: string }) => {
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        if (!user.settings) {
+          user.settings = {} as any;
+        }
+        if (!user.settings?.dismissedNotifications) {
+          user.settings!.dismissedNotifications = [];
+        }
+
+        // Add to dismissed list if not already there
+        if (!user.settings?.dismissedNotifications.includes(notificationId)) {
+          user.settings!.dismissedNotifications.push(notificationId);
+          await user.save();
+        }
+
+        return user.settings;
+      },
+      dismissAllNotifications: async (_: any, { userId, notificationIds }: { userId: string; notificationIds: string[] }) => {
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        // Initialize settings structure if missing
+        const settings = user.settings || ({} as NonNullable<typeof user.settings>);
+        const currentDismissed = settings.dismissedNotifications || [];
+
+        // Merge new IDs with existing dismissed notifications (deduplicated)
+        const mergedSet = new Set(currentDismissed);
+        for (const id of notificationIds) {
+          mergedSet.add(id);
+        }
+
+        user.settings = {
+          ...settings,
+          dismissedNotifications: Array.from(mergedSet),
+        };
+
+        await user.save();
+
+        return user.settings;
       },
     },
   },

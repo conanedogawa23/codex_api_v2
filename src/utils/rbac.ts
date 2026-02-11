@@ -8,7 +8,8 @@ import { logger } from './logger';
  * Uses word-boundary matching to avoid partial matches
  * (e.g., "Database Administrator" should NOT match "admin").
  */
-export const isAdmin = (userRole: string): boolean => {
+export const isAdmin = (userRole: string | undefined | null): boolean => {
+  if (!userRole) return false;
   const adminRoles = ['ceo', 'cto', 'manager', 'director', 'admin'];
   const words = userRole.toLowerCase().split(/[\s/,\-_]+/);
   return adminRoles.some(role => words.includes(role));
@@ -81,9 +82,14 @@ export interface AccessibleProjectsResult {
  * Admins see all; regular users see only projects listed in their user.projects[].
  */
 export const getAccessibleProjectIds = async (
-  userId: string,
-  userRole: string
+  userId: string | undefined | null,
+  userRole: string | undefined | null
 ): Promise<AccessibleProjectsResult> => {
+  if (!userId || !userRole) {
+    logger.warn('Missing userId or userRole for project access check', { userId, userRole });
+    return { isAdminUser: false, projectIds: [] };
+  }
+
   if (isAdmin(userRole)) {
     logger.info('Admin user detected, granting full project access', { userId, userRole });
     return { isAdminUser: true, projectIds: [] };
@@ -128,9 +134,14 @@ export const getAccessibleProjectIds = async (
  * - ['no-access'] sentinel if user has no accessible sprint repos
  */
 export const getAccessibleSprintRepoIds = async (
-  userId: string,
-  userRole: string
+  userId: string | undefined | null,
+  userRole: string | undefined | null
 ): Promise<string[]> => {
+  if (!userId || !userRole) {
+    logger.warn('Missing userId or userRole for sprint repo access check', { userId, userRole });
+    return ['no-access'];
+  }
+
   const { isAdminUser, projectIds } = await getAccessibleProjectIds(userId, userRole);
 
   if (isAdminUser) {
