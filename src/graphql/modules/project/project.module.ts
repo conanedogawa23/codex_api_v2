@@ -557,7 +557,6 @@ export const projectModule = createModule({
             department: input.department,
             deadline: input.deadline,
             progress: 0,
-            assignedTo: [],
             tasks: {
               total: 0,
               completed: 0,

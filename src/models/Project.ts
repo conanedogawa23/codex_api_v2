@@ -32,12 +32,6 @@ export interface IProject extends Document {
   category: string;
   department?: string;
   deadline?: Date;
-  assignedTo: {
-    id: string;
-    name: string;
-    role: string;
-    department: string;
-  }[];
   tasks: {
     total: number;
     completed: number;
@@ -71,8 +65,6 @@ export interface IProject extends Document {
   updateSyncTimestamp(): Promise<IProject>;
   updateProgress(progress: number): Promise<IProject>;
   updateTaskSummary(taskSummary: { total: number; completed: number; inProgress: number; pending: number }): Promise<IProject>;
-  assignUser(userId: string, userName: string, role: string, department: string): Promise<IProject>;
-  unassignUser(userId: string): Promise<IProject>;
 }
 
 const ProjectSchema: Schema = new Schema({
@@ -174,24 +166,6 @@ const ProjectSchema: Schema = new Schema({
     type: Date,
     index: true
   },
-  assignedTo: [{
-    id: {
-      type: String,
-      required: true
-    },
-    name: {
-      type: String,
-      required: true
-    },
-    role: {
-      type: String,
-      required: true
-    },
-    department: {
-      type: String,
-      required: true
-    }
-  }],
   tasks: {
     total: {
       type: Number,
@@ -273,7 +247,6 @@ ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ category: 1 });
 ProjectSchema.index({ department: 1 });
 ProjectSchema.index({ deadline: 1 });
-ProjectSchema.index({ 'assignedTo.id': 1 });
 
 // Virtual for URL-safe project path
 ProjectSchema.virtual('urlPath').get(function() {
@@ -307,22 +280,6 @@ ProjectSchema.methods.updateTaskSummary = function(taskSummary: { total: number;
   this.tasks = taskSummary;
   const progressPercentage = taskSummary.total > 0 ? Math.round((taskSummary.completed / taskSummary.total) * 100) : 0;
   this.updateProgress(progressPercentage);
-  return this.save();
-};
-
-// Instance method to assign user
-ProjectSchema.methods.assignUser = function(userId: string, userName: string, role: string, department: string) {
-  const existingAssignment = this.assignedTo.find((assignment: { id: string; name: string; role: string; department: string }) => assignment.id === userId);
-  if (!existingAssignment) {
-    this.assignedTo.push({ id: userId, name: userName, role, department });
-    return this.save();
-  }
-  return this;
-};
-
-// Instance method to unassign user
-ProjectSchema.methods.unassignUser = function(userId: string) {
-  this.assignedTo = this.assignedTo.filter((assignment: { id: string; name: string; role: string; department: string }) => assignment.id !== userId);
   return this.save();
 };
 

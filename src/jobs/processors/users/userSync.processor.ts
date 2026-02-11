@@ -314,21 +314,6 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
 
               const bulkOps: any[] = [];
 
-              // Project: Update assignedTo
-              bulkOps.push({
-                updateMany: {
-                  filter: { 'assignedTo.id': user.gitlabId.toString() },
-                  update: {
-                    $set: {
-                      'assignedTo.$[elem].name': userUpdates.name || gitlabData.name,
-                      'assignedTo.$[elem].department': userUpdates.department,
-                      'assignedTo.$[elem].role': userUpdates.role || 'Developer'
-                    }
-                  },
-                  arrayFilters: [{ 'elem.id': user.gitlabId.toString() }]
-                }
-              });
-
               // Issue: Update author and assignees
               bulkOps.push({
                 updateMany: {

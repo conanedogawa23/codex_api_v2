@@ -109,7 +109,6 @@ class ProjectSyncProcessor extends BaseSyncProcessor<IProject> {
       progress: 0,
       priority: 'medium',
       category: project.topics?.[0] || 'general',
-      assignedTo: [],
       tasks: {
         total: 0,
         completed: 0,
