@@ -220,10 +220,12 @@ export const projectModule = createModule({
       },
       progress: (parent: any) => parent.progress || 0,
       assignedTo: async (parent: any) => {
-        const projectId = parent._id?.toString() || parent.id;
-        const members = await User.find({ 'projects.id': projectId }).lean();
+        const gitlabId = parent.gitlabId;
+        if (!gitlabId) return [];
+        const gitlabGid = `gid://gitlab/Project/${gitlabId}`;
+        const members = await User.find({ 'projects.id': gitlabGid }).lean();
         return members.map((user: any) => {
-          const projectEntry = user.projects?.find((p: any) => p.id === projectId);
+          const projectEntry = user.projects?.find((p: any) => p.id === gitlabGid);
           return {
             id: user._id.toString(),
             name: user.name,
@@ -303,10 +305,12 @@ export const projectModule = createModule({
       },
       progress: (parent: any) => parent.progress || 0,
       assignedTo: async (parent: any) => {
-        const projectId = parent._id?.toString() || parent.id;
-        const members = await User.find({ 'projects.id': projectId }).lean();
+        const gitlabId = parent.gitlabId;
+        if (!gitlabId) return [];
+        const gitlabGid = `gid://gitlab/Project/${gitlabId}`;
+        const members = await User.find({ 'projects.id': gitlabGid }).lean();
         return members.map((user: any) => {
-          const projectEntry = user.projects?.find((p: any) => p.id === projectId);
+          const projectEntry = user.projects?.find((p: any) => p.id === gitlabGid);
           return {
             id: user._id.toString(),
             name: user.name,
