@@ -16,28 +16,118 @@ type User {
   username: String!
   role: String!
   department: String!
+  departmentDetails: Department
+  userType: String!
   avatar: String
+  webUrl: String
   joinDate: DateTime!
   status: UserStatus!
   skills: [String!]!
   assignedRepos: [String!]!
   projects: [UserProject!]!
+  settings: UserSettings
   lastSynced: DateTime!
   isActive: Boolean!
+  source: String
+  zohoSprintsUserId: String
+  zohoSprintsRoleId: String
+  zohoSprintsProfileId: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+"""
+OrganizationUser is an alias for User type for frontend compatibility
+"""
+type OrganizationUser {
+  id: ID!
+  gitlabId: Int
+  name: String!
+  email: String!
+  username: String!
+  role: String!
+  department: String!
+  departmentDetails: Department
+  userType: String!
+  avatar: String
+  webUrl: String
+  joinDate: DateTime!
+  status: UserStatus!
+  skills: [String!]!
+  assignedRepos: [String!]!
+  projects: [UserProject!]!
+  settings: UserSettings
+  lastSynced: DateTime!
+  isActive: Boolean!
+  source: String
+  zohoSprintsUserId: String
+  zohoSprintsRoleId: String
+  zohoSprintsProfileId: String
   createdAt: DateTime!
   updatedAt: DateTime!
 }
 
 enum UserStatus {
-  active
-  inactive
-  on_leave
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
 }
 
 type UserProject {
   id: String!
   name: String!
   role: String!
+}
+
+type NotificationSettings {
+  email: Boolean
+  push: Boolean
+  inApp: Boolean
+  marketing: Boolean
+  updates: Boolean
+  teamActivity: Boolean
+  mentions: Boolean
+  reminders: Boolean
+  projectUpdates: Boolean
+  taskAssignments: Boolean
+  deadlineReminders: Boolean
+  desktop: Boolean
+}
+
+type DisplaySettings {
+  theme: String
+  density: String
+  iconSize: String
+  animations: Boolean
+  sounds: Boolean
+  showHelp: Boolean
+  dashboardLayout: String
+  showCompleted: Boolean
+}
+
+type PrivacySettings {
+  showOnlineStatus: Boolean
+  showActivity: Boolean
+  allowDataCollection: Boolean
+  shareUsageData: Boolean
+  showEmail: Boolean
+  publicProfile: Boolean
+  showActiveStatus: Boolean
+  shareAnalytics: Boolean
+}
+
+type IntegrationConnection {
+  name: String!
+  connected: Boolean!
+  lastSynced: String
+}
+
+type UserSettings {
+  notifications: NotificationSettings
+  display: DisplaySettings
+  privacy: PrivacySettings
+  integrations: [IntegrationConnection!]
+  dismissedNotifications: [String!]
 }
 
 # ==================== Project Types ====================
@@ -364,8 +454,10 @@ type Query {
     limit: Int = 20
     offset: Int = 0
   ): [User!]!
+  organizationUsers(filter: UserFilterInput): [OrganizationUser!]!
   userByEmail(email: String!): User
   userByGitlabId(gitlabId: Int!): User
+  userSettings(userId: ID!): UserSettings
   
   # Project Queries
   project(id: ID!): Project
@@ -448,9 +540,12 @@ type Query {
 
 type Mutation {
   # User Mutations
-  updateUser(id: ID!, input: UpdateUserInput!): User
-  addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): User
-  removeUserProject(id: ID!, projectId: String!): User
+  updateUser(id: ID!, input: UpdateUserInput!): OrganizationUser
+  addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): OrganizationUser
+  removeUserProject(id: ID!, projectId: String!): OrganizationUser
+  updateUserSettings(userId: ID!, settings: UserSettingsInput!): UserSettings
+  dismissNotification(userId: ID!, notificationId: String!): UserSettings
+  dismissAllNotifications(userId: ID!, notificationIds: [String!]!): UserSettings
   
   # Project Mutations
   updateProject(id: ID!, input: UpdateProjectInput!): Project
@@ -480,6 +575,67 @@ input UpdateUserInput {
   department: String
   status: UserStatus
   skills: [String!]
+}
+
+input UserFilterInput {
+  status: UserStatus
+  department: String
+  role: String
+  isActive: Boolean
+  search: String
+  limit: Int
+  offset: Int
+}
+
+input NotificationSettingsInput {
+  email: Boolean
+  push: Boolean
+  inApp: Boolean
+  marketing: Boolean
+  updates: Boolean
+  teamActivity: Boolean
+  mentions: Boolean
+  reminders: Boolean
+  projectUpdates: Boolean
+  taskAssignments: Boolean
+  deadlineReminders: Boolean
+  desktop: Boolean
+}
+
+input DisplaySettingsInput {
+  theme: String
+  density: String
+  iconSize: String
+  animations: Boolean
+  sounds: Boolean
+  showHelp: Boolean
+  dashboardLayout: String
+  showCompleted: Boolean
+}
+
+input PrivacySettingsInput {
+  showOnlineStatus: Boolean
+  showActivity: Boolean
+  allowDataCollection: Boolean
+  shareUsageData: Boolean
+  showEmail: Boolean
+  publicProfile: Boolean
+  showActiveStatus: Boolean
+  shareAnalytics: Boolean
+}
+
+input IntegrationConnectionInput {
+  name: String!
+  connected: Boolean!
+  lastSynced: String
+}
+
+input UserSettingsInput {
+  notifications: NotificationSettingsInput
+  display: DisplaySettingsInput
+  privacy: PrivacySettingsInput
+  integrations: [IntegrationConnectionInput!]
+  dismissedNotifications: [String!]
 }
 
 input UpdateProjectInput {

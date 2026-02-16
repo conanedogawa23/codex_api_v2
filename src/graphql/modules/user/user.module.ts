@@ -211,9 +211,9 @@ export const userModule = createModule({
     }
 
     extend type Mutation {
-      updateUser(id: ID!, input: UpdateUserInput!): User
-      addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): User
-      removeUserProject(id: ID!, projectId: String!): User
+      updateUser(id: ID!, input: UpdateUserInput!): OrganizationUser
+      addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): OrganizationUser
+      removeUserProject(id: ID!, projectId: String!): OrganizationUser
       updateUserSettings(userId: ID!, settings: UserSettingsInput!): UserSettings
       dismissNotification(userId: ID!, notificationId: String!): UserSettings
       dismissAllNotifications(userId: ID!, notificationIds: [String!]!): UserSettings
