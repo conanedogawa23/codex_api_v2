@@ -1,10 +1,14 @@
 import 'reflect-metadata';  // Required for GraphQL Modules
+import { createServer, Server as HTTPServer } from 'http';
 import express from 'express';
 import { ApolloServer } from 'apollo-server-express';
+import { ApolloServerPluginDrainHttpServer } from 'apollo-server-core';
+import { WebSocketServer } from 'ws';
 import { database } from './config/database';
 import { environment } from './config/environment';
 import { logger } from './utils/logger';
-import { schema, createExecutor } from './graphql/application';
+import { schema, createExecution, createExecutor, createSubscription } from './graphql/application';
+import { buildGraphQLContext } from './utils/auth';
 import {
   errorHandler,
   notFoundHandler,
@@ -13,13 +17,18 @@ import {
   corsMiddleware,
 } from './middleware';
 import { jobManager } from './jobs';
+import { mcpBridge } from './services/MCPBridge';
+
+const { useServer } = require('graphql-ws/use/ws');
 
 class Server {
   private app: express.Application;
   private apolloServer: ApolloServer | null = null;
+  private httpServer: HTTPServer;
 
   constructor() {
     this.app = express();
+    this.httpServer = createServer(this.app);
   }
 
   private setupMiddleware(): void {
@@ -38,14 +47,31 @@ class Server {
   private async setupApolloServer(): Promise<void> {
     const config = environment.get();
     const executor = createExecutor();
+    const execute = createExecution();
+    const subscribe = createSubscription();
+    const wsServer = new WebSocketServer({
+      server: this.httpServer,
+      path: '/graphql',
+    });
+    const wsServerCleanup = useServer(
+      {
+        schema,
+        execute,
+        subscribe,
+        context: async (ctx: { connectionParams?: Record<string, unknown> }) =>
+          buildGraphQLContext({
+            connectionParams:
+              (ctx.connectionParams as Record<string, unknown> | undefined) || undefined,
+          }),
+      },
+      wsServer
+    );
 
     this.apolloServer = new ApolloServer({
       schema,
       executor,
       introspection: config.graphqlIntrospection,
-      context: ({ req }) => ({
-        req,
-      }),
+      context: async ({ req }) => buildGraphQLContext({ req }),
       formatError: (error) => {
         logger.error('GraphQL Error:', {
           message: error.message,
@@ -55,6 +81,16 @@ class Server {
         return error;
       },
       plugins: [
+        ApolloServerPluginDrainHttpServer({ httpServer: this.httpServer }),
+        {
+          async serverWillStart() {
+            return {
+              async drainServer() {
+                await wsServerCleanup.dispose();
+              },
+            };
+          },
+        },
         {
           async requestDidStart() {
             return {
@@ -357,12 +393,12 @@ class Server {
       // await this.initializeJobs();
 
       // Start listening
-      const server = this.app.listen(config.port, () => {
+      this.httpServer.listen(config.port, () => {
         logger.info(`Server running on port ${config.port} [${config.nodeEnv}]`);
       });
 
       // Graceful shutdown
-      this.setupGracefulShutdown(server);
+      this.setupGracefulShutdown(this.httpServer);
 
     } catch (error) {
       logger.error('Failed to start server:', error);
@@ -384,6 +420,13 @@ class Server {
           logger.info('Job manager stopped');
         } catch (error) {
           logger.error('Error stopping job manager:', error);
+        }
+
+        try {
+          await mcpBridge.dispose();
+          logger.info('GitLab MCP bridge stopped');
+        } catch (error) {
+          logger.error('Error stopping GitLab MCP bridge:', error);
         }
 
         // Stop Apollo Server

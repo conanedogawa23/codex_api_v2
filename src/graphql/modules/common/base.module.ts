@@ -10,6 +10,10 @@ export const baseModule = createModule({
     type Mutation {
       _empty: String
     }
+
+    type Subscription {
+      _empty: String
+    }
   `,
   resolvers: {
     Query: {

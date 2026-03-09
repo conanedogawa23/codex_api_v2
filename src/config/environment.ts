@@ -46,12 +46,12 @@ class Environment {
 
   private loadConfig(): EnvironmentConfig {
     return {
-      port: parseInt(process.env.PORT || '4000', 10),
+      port: parseInt(process.env.PORT || '5001', 10),
       nodeEnv: process.env.NODE_ENV || 'development',
       mongodbUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/codex_api_v2',
       graphqlPlayground: process.env.GRAPHQL_PLAYGROUND === 'true',
       graphqlIntrospection: process.env.GRAPHQL_INTROSPECTION === 'true',
-      graphqlUrl: process.env.GRAPHQL_URL || `http://localhost:${process.env.PORT || '4000'}/graphql`,
+      graphqlUrl: process.env.GRAPHQL_URL || `http://localhost:${process.env.PORT || '5001'}/graphql`,
       logLevel: process.env.LOG_LEVEL || 'info',
       jwtSecret: process.env.JWT_SECRET || 'default-secret-change-in-production',
       jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',

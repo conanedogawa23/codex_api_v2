@@ -74,14 +74,15 @@ print_success "MongoDB URI configured"
 mkdir -p logs/pm2
 print_success "Logs directory ready"
 
-# Check if node_modules exists
-if [ ! -d "node_modules" ]; then
-    print_warning "node_modules not found. Installing dependencies..."
-    npm install
-    print_success "Dependencies installed"
-else
-    print_success "Dependencies already installed"
+# Install dependencies using lock file for reproducible builds
+if [ ! -f "package-lock.json" ]; then
+    print_error "package-lock.json not found. Cannot perform clean install."
+    print_info "Ensure package-lock.json is committed to the repository."
+    exit 1
 fi
+print_info "Installing dependencies from lock file..."
+npm ci
+print_success "Dependencies installed"
 
 # Build the application
 print_info "Building TypeScript..."

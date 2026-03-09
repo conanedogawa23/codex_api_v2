@@ -1,5 +1,7 @@
 import 'reflect-metadata';
 import { createApplication } from 'graphql-modules';
+import { aiContextModule } from './modules/aiContext/aiContext.module';
+import { chatModule } from './modules/chat/chat.module';
 import { scalarsModule } from './modules/common/scalars.module';
 import { baseModule } from './modules/common/base.module';
 import { healthModule } from './modules/health/health.module';
@@ -32,6 +34,8 @@ import { analyticsModule } from './modules/analytics/analytics.module';
 
 export const application = createApplication({
   modules: [
+    aiContextModule,
+    chatModule,
     scalarsModule,
     baseModule,
     healthModule,
@@ -67,3 +71,5 @@ export const application = createApplication({
 // Export schema and executor for Apollo Server
 export const schema = application.schema;
 export const createExecutor = () => application.createApolloExecutor();
+export const createExecution = () => application.createExecution();
+export const createSubscription = () => application.createSubscription();

@@ -48,7 +48,7 @@ module.exports = {
       restart_delay: 4000,
       // Advanced features
       vizion: true,
-      post_update: ['npm install', 'npm run build'],
+      post_update: ['npm ci', 'npm run build'],
     }
   ],
 };
