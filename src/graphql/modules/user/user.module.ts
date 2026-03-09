@@ -1,7 +1,46 @@
+import { randomInt } from 'crypto';
+
 import { createModule, gql } from 'graphql-modules';
 import { User } from '../../../models/User';
 import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
+import { logger } from '../../../utils/logger';
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_SANITIZE_REGEX = /[^a-z0-9._-]/g;
+const USERNAME_EDGE_TRIM_REGEX = /^[-_.]+|[-_.]+$/g;
+
+function normalizeUserStatus(status?: string): string {
+  return status ? status.toLowerCase().replace(/_/g, '-') : 'active';
+}
+
+function buildBaseUsername(email: string): string {
+  const localPart = email.split('@')[0]?.toLowerCase().trim() || '';
+  const username = localPart
+    .replace(USERNAME_SANITIZE_REGEX, '_')
+    .replace(/_+/g, '_')
+    .replace(USERNAME_EDGE_TRIM_REGEX, '');
+
+  return username || `user_${randomInt(1000, 10000)}`;
+}
+
+async function generateUniqueUsername(baseUsername: string): Promise<string> {
+  const existingUser = await User.findOne({ username: baseUsername }).select('_id').lean();
+  if (!existingUser) {
+    return baseUsername;
+  }
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidateUsername = `${baseUsername}_${randomInt(1000, 10000)}`;
+    const candidateExists = await User.findOne({ username: candidateUsername }).select('_id').lean();
+
+    if (!candidateExists) {
+      return candidateUsername;
+    }
+  }
+
+  throw new AppError('Unable to generate a unique username. Please try again.', 500);
+}
 
 export const userModule = createModule({
   id: 'user',
@@ -186,6 +225,16 @@ export const userModule = createModule({
       skills: [String!]
     }
 
+    input CreateUserInput {
+      name: String!
+      email: String!
+      role: String!
+      department: String!
+      status: UserStatus
+      skills: [String!]
+      assignedRepos: [String!]
+    }
+
     input UserFilterInput {
       status: UserStatus
       department: String
@@ -211,6 +260,7 @@ export const userModule = createModule({
     }
 
     extend type Mutation {
+      createUser(input: CreateUserInput!): OrganizationUser!
       updateUser(id: ID!, input: UpdateUserInput!): OrganizationUser
       addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): OrganizationUser
       removeUserProject(id: ID!, projectId: String!): OrganizationUser
@@ -403,10 +453,77 @@ export const userModule = createModule({
       },
     },
     Mutation: {
+      createUser: async (_: any, { input }: any) => {
+        const name = input.name?.trim();
+        const email = input.email?.trim().toLowerCase();
+        const role = input.role?.trim();
+        const department = input.department?.trim();
+
+        if (!name || !email || !role || !department) {
+          throw new AppError('Name, email, role, and department are required', 400);
+        }
+
+        if (!EMAIL_REGEX.test(email)) {
+          throw new AppError('Please enter a valid email address', 400);
+        }
+
+        const existingEmailUser = await User.findOne({ email }).select('_id').lean();
+        if (existingEmailUser) {
+          throw new AppError('A user with this email already exists', 409);
+        }
+
+        const username = await generateUniqueUsername(buildBaseUsername(email));
+        const user = new User({
+          assignedRepos: input.assignedRepos || [],
+          canSyncFromGitlab: false,
+          department,
+          email,
+          isActive: true,
+          joinDate: new Date(),
+          lastSynced: new Date(),
+          name,
+          projects: [],
+          role,
+          skills: input.skills || [],
+          status: normalizeUserStatus(input.status),
+          userSource: 'manual',
+          userType: 'human',
+          username,
+        });
+
+        try {
+          await user.save();
+
+          logger.info('Manual user created', {
+            email: user.email,
+            userId: user._id.toString(),
+            username: user.username,
+          });
+
+          return user;
+        } catch (error: any) {
+          if (error?.code === 11000) {
+            if (error?.keyPattern?.email) {
+              throw new AppError('A user with this email already exists', 409);
+            }
+
+            if (error?.keyPattern?.username) {
+              throw new AppError('A user with this username already exists', 409);
+            }
+          }
+
+          logger.error('Failed to create manual user', {
+            email,
+            error: error?.message,
+          });
+
+          throw error;
+        }
+      },
       updateUser: async (_: any, { id, input }: any) => {
         // Convert GraphQL enum to DB format
         const dbInput = { ...input };
-        if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
+        if (dbInput.status) dbInput.status = normalizeUserStatus(dbInput.status);
         
         const user = await User.findByIdAndUpdate(id, dbInput, { new: true, runValidators: true });
         if (!user) {

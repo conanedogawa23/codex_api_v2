@@ -540,6 +540,7 @@ type Query {
 
 type Mutation {
   # User Mutations
+  createUser(input: CreateUserInput!): OrganizationUser!
   updateUser(id: ID!, input: UpdateUserInput!): OrganizationUser
   addUserProject(id: ID!, projectId: String!, projectName: String!, role: String!): OrganizationUser
   removeUserProject(id: ID!, projectId: String!): OrganizationUser
@@ -575,6 +576,16 @@ input UpdateUserInput {
   department: String
   status: UserStatus
   skills: [String!]
+}
+
+input CreateUserInput {
+  name: String!
+  email: String!
+  role: String!
+  department: String!
+  status: UserStatus
+  skills: [String!]
+  assignedRepos: [String!]
 }
 
 input UserFilterInput {
