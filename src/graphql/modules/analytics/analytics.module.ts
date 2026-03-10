@@ -2,11 +2,27 @@ import { createModule, gql } from 'graphql-modules';
 import mongoose from 'mongoose';
 import { Task } from '../../../models/Task';
 import { Project } from '../../../models/Project';
-import { User } from '../../../models/User';
 import { Sprint } from '../../../models/Sprint';
 import { Pipeline } from '../../../models/Pipeline';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildProjectIdInValues(projectIds: string[]): any[] {
+  const values: any[] = [];
+
+  for (const projectId of projectIds) {
+    values.push(projectId);
+    if (mongoose.Types.ObjectId.isValid(projectId)) {
+      values.push(new mongoose.Types.ObjectId(projectId));
+    }
+  }
+
+  return values;
+}
 
 export const analyticsModule = createModule({
   id: 'analytics',
@@ -86,6 +102,9 @@ export const analyticsModule = createModule({
       hoursLoggedByResource: [ResourceHours!]!
       allocationStatus: [AllocationStatus!]!
       resources: [ResourceDetail!]!
+      highUtilizationCount: Int!
+      totalHoursLogged: Float!
+      totalCount: Int!
     }
 
     type ProjectCompletion {
@@ -94,6 +113,7 @@ export const analyticsModule = createModule({
       completion: Float!
       tasksCompleted: Int!
       tasksTotal: Int!
+      budgetAllocated: Float!
     }
 
     type TimeComparison {
@@ -102,6 +122,7 @@ export const analyticsModule = createModule({
       estimatedHours: Float!
       actualHours: Float!
       variance: Float!
+      budgetAllocated: Float!
     }
 
     type ProjectDetail {
@@ -113,12 +134,14 @@ export const analyticsModule = createModule({
       tasksCompleted: Int!
       estimatedHours: Float!
       actualHours: Float!
+      budgetAllocated: Float!
     }
 
     type ProjectProgressAnalytics {
       completionData: [ProjectCompletion!]!
       timeComparison: [TimeComparison!]!
       projects: [ProjectDetail!]!
+      totalCount: Int!
     }
 
     type PipelineStatusCount {
@@ -135,8 +158,8 @@ export const analyticsModule = createModule({
     extend type Query {
       taskStatusAnalytics(projectId: String, sprintId: String): TaskStatusAnalytics!
       sprintVelocityAnalytics(sprintRepoId: String, limit: Int): SprintVelocityAnalytics!
-      resourceAllocationAnalytics(projectId: String): ResourceAllocationAnalytics!
-      projectProgressAnalytics(limit: Int): ProjectProgressAnalytics!
+      resourceAllocationAnalytics(projectId: String, limit: Int = 20, offset: Int = 0, search: String): ResourceAllocationAnalytics!
+      projectProgressAnalytics(limit: Int = 20, offset: Int = 0, search: String, budgetOnly: Boolean = false): ProjectProgressAnalytics!
       pipelineAnalytics(projectId: String): PipelineAnalytics!
     }
   `,
@@ -303,44 +326,23 @@ export const analyticsModule = createModule({
         }
       },
 
-      resourceAllocationAnalytics: async (_: any, { projectId }: { projectId?: string }) => {
+      resourceAllocationAnalytics: async (
+        _: any,
+        { projectId, limit = 20, offset = 0, search }: { projectId?: string; limit?: number; offset?: number; search?: string }
+      ) => {
         try {
-          const filter: any = { isActive: true, 'assignedTo.id': { $exists: true, $ne: null } };
-          if (projectId) filter.projectId = projectId;
+          const taskMatch: any = {
+            isActive: true,
+            'assignedTo.id': { $exists: true, $ne: null },
+          };
 
-          const hoursAggregation = await Task.aggregate([
-            { $match: filter },
-            {
-              $group: {
-                _id: '$assignedTo.id',
-                userName: { $first: '$assignedTo.name' },
-                totalHours: { $sum: { $ifNull: ['$actualHours', 0] } }
-              }
-            },
-            { $sort: { totalHours: -1 } },
-            { $limit: 20 }
-          ]);
+          if (projectId) {
+            taskMatch.projectId = { $in: buildProjectIdInValues([projectId]) };
+          }
 
-          const allocationAggregation = await Task.aggregate([
-            { $match: filter },
-            {
-              $group: {
-                _id: '$status',
-                count: { $sum: 1 }
-              }
-            }
-          ]);
-
-          const totalTasks = allocationAggregation.reduce((sum: number, item: any) => sum + item.count, 0);
-
-          const allocationStatus = allocationAggregation.map((item: any) => ({
-            status: item._id,
-            count: item.count,
-            percentage: totalTasks > 0 ? (item.count / totalTasks) * 100 : 0
-          }));
-
-          const resourceDetails = await Task.aggregate([
-            { $match: filter },
+          const trimmedSearch = search?.trim();
+          const resourcePipeline: any[] = [
+            { $match: taskMatch },
             {
               $group: {
                 _id: '$assignedTo.id',
@@ -348,169 +350,269 @@ export const analyticsModule = createModule({
                 email: { $first: '$assignedTo.email' },
                 totalTasks: { $sum: 1 },
                 completedTasks: {
-                  $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+                  $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
                 },
                 totalHours: {
-                  $sum: { $ifNull: ['$estimatedHours', 0] }
+                  $sum: { $ifNull: ['$estimatedHours', 0] },
                 },
                 actualHours: {
-                  $sum: { $ifNull: ['$actualHours', 0] }
-                }
-              }
+                  $sum: { $ifNull: ['$actualHours', 0] },
+                },
+              },
             },
             {
               $lookup: {
                 from: 'users',
-                let: { userId: '$_id' },
+                let: { assignedUserId: '$_id' },
                 pipeline: [
                   {
                     $match: {
-                      $expr: { $eq: [{ $toString: '$_id' }, '$$userId'] }
-                    }
-                  }
+                      $expr: {
+                        $or: [
+                          { $eq: [{ $toString: '$_id' }, '$$assignedUserId'] },
+                          { $eq: [{ $toString: '$gitlabId' }, '$$assignedUserId'] },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    $project: {
+                      department: 1,
+                    },
+                  },
                 ],
-                as: 'userInfo'
-              }
+                as: 'userInfo',
+              },
             },
             {
-              $project: {
+              $addFields: {
                 userId: '$_id',
+                department: {
+                  $ifNull: [{ $arrayElemAt: ['$userInfo.department', 0] }, 'Unknown'],
+                },
+              },
+            },
+          ];
+
+          if (trimmedSearch) {
+            const escapedSearch = escapeRegex(trimmedSearch);
+            resourcePipeline.push({
+              $match: {
+                $or: [
+                  { userName: { $regex: escapedSearch, $options: 'i' } },
+                  { email: { $regex: escapedSearch, $options: 'i' } },
+                  { department: { $regex: escapedSearch, $options: 'i' } },
+                ],
+              },
+            });
+          }
+
+          resourcePipeline.push(
+            {
+              $project: {
+                _id: 0,
+                userId: 1,
                 userName: 1,
-                email: 1,
-                department: { $ifNull: [{ $arrayElemAt: ['$userInfo.department', 0] }, 'Unknown'] },
+                email: { $ifNull: ['$email', ''] },
+                department: 1,
                 totalTasks: 1,
                 completedTasks: 1,
                 totalHours: 1,
-                actualHours: 1
-              }
+                actualHours: 1,
+              },
             },
-            { $sort: { totalTasks: -1 } },
-            { $limit: 20 }
-          ]);
+            { $sort: { totalTasks: -1, userName: 1 } }
+          );
 
-          logger.info('Resource allocation analytics generated', { projectId });
+          const resourceDetails = await Task.aggregate(resourcePipeline);
+          const totalCount = resourceDetails.length;
+          const paginatedResources = resourceDetails.slice(offset, offset + limit);
 
-          return {
-            hoursLoggedByResource: hoursAggregation.map((item: any) => ({
-              userId: item._id,
-              userName: item.userName,
-              totalHours: item.totalHours
-            })),
-            allocationStatus,
-            resources: resourceDetails.map((item: any) => ({
+          const hoursLoggedByResource = [...resourceDetails]
+            .sort((left, right) => right.actualHours - left.actualHours || left.userName.localeCompare(right.userName))
+            .slice(0, 20)
+            .map((item: any) => ({
               userId: item.userId,
               userName: item.userName,
-              email: item.email || '',
+              totalHours: item.actualHours,
+            }));
+
+          let allocationAggregation: any[] = [];
+          if (totalCount > 0) {
+            const allocationMatch: any = { ...taskMatch };
+
+            if (trimmedSearch) {
+              allocationMatch['assignedTo.id'] = {
+                $in: resourceDetails.map((item: any) => item.userId),
+              };
+            }
+
+            allocationAggregation = await Task.aggregate([
+              { $match: allocationMatch },
+              {
+                $group: {
+                  _id: '$status',
+                  count: { $sum: 1 },
+                },
+              },
+            ]);
+          }
+
+          const totalTasks = allocationAggregation.reduce((sum: number, item: any) => sum + item.count, 0);
+          const allocationStatus = allocationAggregation.map((item: any) => ({
+            status: item._id,
+            count: item.count,
+            percentage: totalTasks > 0 ? (item.count / totalTasks) * 100 : 0,
+          }));
+          const totalHoursLogged = resourceDetails.reduce(
+            (sum: number, item: any) => sum + item.actualHours,
+            0
+          );
+          const highUtilizationCount = resourceDetails.filter((item: any) => {
+            const utilizationRate = item.totalHours > 0 ? (item.actualHours / item.totalHours) * 100 : 0;
+            return utilizationRate > 80;
+          }).length;
+
+          logger.info('Resource allocation analytics generated', {
+            projectId,
+            returnedCount: paginatedResources.length,
+            search: trimmedSearch,
+            totalCount,
+          });
+
+          return {
+            hoursLoggedByResource,
+            allocationStatus,
+            highUtilizationCount,
+            resources: paginatedResources.map((item: any) => ({
+              userId: item.userId,
+              userName: item.userName,
+              email: item.email,
               department: item.department,
               totalTasks: item.totalTasks,
               completedTasks: item.completedTasks,
               totalHours: item.totalHours,
-              actualHours: item.actualHours
-            }))
+              actualHours: item.actualHours,
+            })),
+            totalHoursLogged,
+            totalCount,
           };
         } catch (error) {
-          logger.error('Error generating resource allocation analytics', { error, projectId });
+          logger.error('Error generating resource allocation analytics', { error, projectId, search });
           throw new AppError('Failed to generate resource allocation analytics', 500);
         }
       },
 
-      projectProgressAnalytics: async (_: any, { limit = 20 }: { limit: number }) => {
+      projectProgressAnalytics: async (
+        _: any,
+        { limit = 20, offset = 0, search, budgetOnly = false }: { limit?: number; offset?: number; search?: string; budgetOnly?: boolean }
+      ) => {
         try {
-          const projects = await Project.find({ isActive: true })
+          const projectFilter: any = { isActive: true };
+          const trimmedSearch = search?.trim();
+
+          if (budgetOnly) {
+            projectFilter['budget.allocated'] = { $gt: 0 };
+          }
+
+          if (trimmedSearch) {
+            const escapedSearch = escapeRegex(trimmedSearch);
+            projectFilter.$or = [
+              { name: { $regex: escapedSearch, $options: 'i' } },
+              { nameWithNamespace: { $regex: escapedSearch, $options: 'i' } },
+            ];
+          }
+
+          const matchingProjects = await Project.find(projectFilter)
+            .select('name nameWithNamespace status progress tasks budget lastActivityAt')
             .sort({ lastActivityAt: -1 })
-            .limit(limit)
             .lean();
 
-          const completionData = projects.map((project: any) => ({
-            projectId: project._id.toString(),
-            projectName: project.name,
-            completion: project.progress || 0,
-            tasksCompleted: project.tasks?.completed || 0,
-            tasksTotal: project.tasks?.total || 0
-          }));
-
-          const timeComparisons = await Promise.all(
-            projects.map(async (project: any) => {
-              const projectId = project._id.toString();
-              
-              const tasks = await Task.aggregate([
+          const projectIds = matchingProjects.map((project: any) => project._id.toString());
+          const taskStats = projectIds.length > 0
+            ? await Task.aggregate([
                 {
                   $match: {
-                    projectId,
-                    isActive: true
-                  }
+                    projectId: { $in: buildProjectIdInValues(projectIds) },
+                    isActive: true,
+                  },
                 },
                 {
                   $group: {
-                    _id: null,
-                    estimatedHours: { $sum: { $ifNull: ['$estimatedHours', 0] } },
-                    actualHours: { $sum: { $ifNull: ['$actualHours', 0] } }
-                  }
-                }
-              ]);
-
-              const estimatedHours = tasks.length > 0 ? tasks[0].estimatedHours : 0;
-              const actualHours = tasks.length > 0 ? tasks[0].actualHours : 0;
-              const variance = estimatedHours > 0 ? ((actualHours - estimatedHours) / estimatedHours) * 100 : 0;
-
-              return {
-                projectId,
-                projectName: project.name,
-                estimatedHours,
-                actualHours,
-                variance
-              };
-            })
-          );
-
-          const projectDetails = await Promise.all(
-            projects.map(async (project: any) => {
-              const projectId = project._id.toString();
-              
-              const tasks = await Task.aggregate([
-                {
-                  $match: {
-                    projectId,
-                    isActive: true
-                  }
-                },
-                {
-                  $group: {
-                    _id: null,
+                    _id: '$projectId',
                     total: { $sum: 1 },
                     completed: {
-                      $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+                      $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
                     },
                     estimatedHours: { $sum: { $ifNull: ['$estimatedHours', 0] } },
-                    actualHours: { $sum: { $ifNull: ['$actualHours', 0] } }
-                  }
-                }
-              ]);
+                    actualHours: { $sum: { $ifNull: ['$actualHours', 0] } },
+                  },
+                },
+              ])
+            : [];
 
-              const taskData = tasks.length > 0 ? tasks[0] : { total: 0, completed: 0, estimatedHours: 0, actualHours: 0 };
-
-              return {
-                projectId,
-                projectName: project.name,
-                status: project.status || 'planned',
-                progress: project.progress || 0,
-                tasksTotal: taskData.total,
-                tasksCompleted: taskData.completed,
-                estimatedHours: taskData.estimatedHours,
-                actualHours: taskData.actualHours
-              };
-            })
+          const taskStatsByProject = new Map(
+            taskStats.map((item: any) => [String(item._id), item])
           );
 
-          logger.info('Project progress analytics generated', { projectCount: projects.length });
+          const allProjectDetails = matchingProjects.map((project: any) => {
+            const projectId = project._id.toString();
+            const projectTaskStats = taskStatsByProject.get(projectId) || {
+              total: project.tasks?.total || 0,
+              completed: project.tasks?.completed || 0,
+              estimatedHours: 0,
+              actualHours: 0,
+            };
+
+            return {
+              projectId,
+              projectName: project.name,
+              status: project.status || 'planned',
+              progress: project.progress || 0,
+              tasksTotal: projectTaskStats.total,
+              tasksCompleted: projectTaskStats.completed,
+              estimatedHours: projectTaskStats.estimatedHours,
+              actualHours: projectTaskStats.actualHours,
+              budgetAllocated: project.budget?.allocated || 0,
+            };
+          });
+
+          const totalCount = allProjectDetails.length;
+          const paginatedProjects = allProjectDetails.slice(offset, offset + limit);
+          const completionData = allProjectDetails.map((project: any) => ({
+            projectId: project.projectId,
+            projectName: project.projectName,
+            completion: project.progress,
+            tasksCompleted: project.tasksCompleted,
+            tasksTotal: project.tasksTotal,
+            budgetAllocated: project.budgetAllocated,
+          }));
+          const timeComparison = allProjectDetails.map((project: any) => ({
+            projectId: project.projectId,
+            projectName: project.projectName,
+            estimatedHours: project.estimatedHours,
+            actualHours: project.actualHours,
+            variance: project.estimatedHours > 0
+              ? ((project.actualHours - project.estimatedHours) / project.estimatedHours) * 100
+              : 0,
+            budgetAllocated: project.budgetAllocated,
+          }));
+
+          logger.info('Project progress analytics generated', {
+            budgetOnly,
+            returnedCount: paginatedProjects.length,
+            search: trimmedSearch,
+            totalCount,
+          });
 
           return {
             completionData,
-            timeComparison: timeComparisons,
-            projects: projectDetails
+            timeComparison,
+            projects: paginatedProjects,
+            totalCount,
           };
         } catch (error) {
-          logger.error('Error generating project progress analytics', { error });
+          logger.error('Error generating project progress analytics', { budgetOnly, error, search });
           throw new AppError('Failed to generate project progress analytics', 500);
         }
       },

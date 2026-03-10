@@ -3,6 +3,10 @@ import { Milestone } from '../../../models/Milestone';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export const milestoneModule = createModule({
   id: 'milestone',
   typeDefs: gql`
@@ -28,6 +32,11 @@ export const milestoneModule = createModule({
       closed
     }
 
+    type MilestonesResult {
+      milestones: [Milestone!]!
+      totalCount: Int!
+    }
+
     input UpdateMilestoneInput {
       title: String
       description: String
@@ -44,7 +53,8 @@ export const milestoneModule = createModule({
         state: MilestoneStateType
         limit: Int = 20
         offset: Int = 0
-      ): [Milestone!]!
+        search: String
+      ): MilestonesResult!
       milestonesByProject(projectId: String!, state: MilestoneStateType, limit: Int = 20): [Milestone!]!
     }
 
@@ -79,17 +89,32 @@ export const milestoneModule = createModule({
 
       milestones: async (
         _: any,
-        { projectId, state, limit = 20, offset = 0 }: any
+        { projectId, state, limit = 20, offset = 0, search }: any
       ) => {
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
         if (state) filter.state = state;
+        if (search?.trim()) {
+          const escapedSearch = escapeRegex(search.trim());
+          filter.$or = [
+            { title: { $regex: escapedSearch, $options: 'i' } },
+            { description: { $regex: escapedSearch, $options: 'i' } },
+          ];
+        }
 
-        return await Milestone.find(filter)
-          .limit(limit)
-          .skip(offset)
-          .sort({ dueDate: 1 })
-          .lean();
+        const [milestones, totalCount] = await Promise.all([
+          Milestone.find(filter)
+            .limit(limit)
+            .skip(offset)
+            .sort({ dueDate: 1 })
+            .lean(),
+          Milestone.countDocuments(filter),
+        ]);
+
+        return {
+          milestones,
+          totalCount,
+        };
       },
 
       milestonesByProject: async (

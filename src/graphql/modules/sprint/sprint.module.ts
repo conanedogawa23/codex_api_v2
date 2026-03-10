@@ -8,6 +8,44 @@ import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { getAccessibleSprintRepoIds } from '../../../utils/rbac';
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildSprintStatusConditions(status: string): Record<string, unknown>[] {
+  switch (status) {
+    case 'PLANNED':
+      return [
+        { status: 'planned' },
+        { statusName: /^planned$/i },
+        { statusName: /^upcoming$/i },
+        { statusType: 1 },
+      ];
+    case 'ACTIVE':
+      return [
+        { status: 'active' },
+        { statusName: /^active$/i },
+        { statusType: 2 },
+      ];
+    case 'COMPLETED':
+      return [
+        { status: 'completed' },
+        { statusName: /^completed$/i },
+        { statusType: 3 },
+      ];
+    case 'CANCELLED':
+      return [
+        { status: 'cancelled' },
+        { status: 'canceled' },
+        { statusName: /^cancelled$/i },
+        { statusName: /^canceled$/i },
+        { statusType: 4 },
+      ];
+    default:
+      return [{ status: status.toLowerCase() }];
+  }
+}
+
 export const sprintModule = createModule({
   id: 'sprint',
   typeDefs: gql`
@@ -54,6 +92,11 @@ export const sprintModule = createModule({
       percentage: Int!
     }
 
+    type SprintsResult {
+      sprints: [Sprint!]!
+      totalCount: Int!
+    }
+
     enum SprintStatus {
       PLANNED
       ACTIVE
@@ -93,7 +136,15 @@ export const sprintModule = createModule({
 
     extend type Query {
       sprint(id: ID!): Sprint
-      sprints(limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): [Sprint!]!
+      sprints(
+        limit: Int = 20
+        offset: Int = 0
+        status: SprintStatus
+        sprintRepoId: ID
+        search: String
+        userId: ID
+        userRole: String
+      ): SprintsResult!
       sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20, userId: ID, userRole: String): [Sprint!]!
       sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
       activeSprints(sprintRepoId: ID, userId: ID, userRole: String): [Sprint!]!
@@ -217,9 +268,28 @@ export const sprintModule = createModule({
         }
       },
 
-      sprints: async (_: any, { limit, offset, userId, userRole }: { limit: number; offset: number; userId?: string; userRole?: string }) => {
+      sprints: async (
+        _: any,
+        {
+          limit,
+          offset,
+          status,
+          sprintRepoId,
+          search,
+          userId,
+          userRole,
+        }: {
+          limit: number;
+          offset: number;
+          status?: string;
+          sprintRepoId?: string;
+          search?: string;
+          userId?: string;
+          userRole?: string;
+        }
+      ) => {
         try {
-          const filter: any = { isActive: true };
+          const andConditions: Record<string, unknown>[] = [{ isActive: true }];
 
           // Apply role-based filtering if userId and userRole are provided
           if (userId && userRole) {
@@ -227,23 +297,73 @@ export const sprintModule = createModule({
             
             // If user has no access, return empty array
             if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
+              return {
+                sprints: [],
+                totalCount: 0,
+              };
             }
             
             // If not admin and has accessible repos, filter by them
             if (accessibleSprintRepoIds.length > 0) {
-              filter.sprintRepoId = { $in: accessibleSprintRepoIds };
+              andConditions.push({
+                sprintRepoId: {
+                  $in: accessibleSprintRepoIds
+                    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                    .map((id) => new mongoose.Types.ObjectId(id)),
+                },
+              });
             }
             // If accessibleSprintRepoIds is empty array, user is admin - no filtering needed
           }
 
-          return await Sprint.find(filter)
-            .sort({ startDate: -1 })
-            .limit(limit)
-            .skip(offset)
-            .lean();
+          if (sprintRepoId) {
+            if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
+              throw new AppError('Invalid sprint repository id', 400);
+            }
+
+            andConditions.push({
+              sprintRepoId: new mongoose.Types.ObjectId(sprintRepoId),
+            });
+          }
+
+          if (status) {
+            andConditions.push({
+              $or: buildSprintStatusConditions(status),
+            });
+          }
+
+          if (search?.trim()) {
+            const searchRegex = new RegExp(escapeRegex(search.trim()), 'i');
+            andConditions.push({
+              $or: [
+                { name: searchRegex },
+                { description: searchRegex },
+                { goal: searchRegex },
+                { projectName: searchRegex },
+              ],
+            });
+          }
+
+          const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+
+          const [sprints, totalCount] = await Promise.all([
+            Sprint.find(filter)
+              .sort({ startDate: -1 })
+              .limit(limit)
+              .skip(offset)
+              .lean(),
+            Sprint.countDocuments(filter),
+          ]);
+
+          return {
+            sprints,
+            totalCount,
+          };
         } catch (error) {
-          logger.error('Error fetching sprints', { limit, offset, userId, error });
+          logger.error('Error fetching sprints', { limit, offset, status, sprintRepoId, search, userId, error });
+          if (error instanceof AppError) {
+            throw error;
+          }
           throw new AppError('Failed to fetch sprints', 500);
         }
       },

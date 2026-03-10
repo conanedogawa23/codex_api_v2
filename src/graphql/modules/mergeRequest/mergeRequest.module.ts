@@ -67,6 +67,11 @@ export const mergeRequestModule = createModule({
       targetBranch: String
     }
 
+    type GitLabMergeRequestsResult {
+      mergeRequests: [MergeRequest!]!
+      totalCount: Int!
+    }
+
     extend type Query {
       mergeRequest(id: ID!): MergeRequest
       mergeRequestByGitlabId(gitlabId: Int!): MergeRequest
@@ -80,7 +85,7 @@ export const mergeRequestModule = createModule({
         offset: Int = 0
       ): [MergeRequest!]!
       mergeRequestsByProject(projectId: Int!, state: MergeRequestState, limit: Int = 20): [MergeRequest!]!
-      gitlabMergeRequests(projectId: String!, state: MergeRequestState, limit: Int = 20): [MergeRequest!]!
+      gitlabMergeRequests(projectId: String!, state: MergeRequestState, limit: Int = 20, offset: Int = 0, search: String): GitLabMergeRequestsResult!
     }
 
     extend type Mutation {
@@ -145,17 +150,37 @@ export const mergeRequestModule = createModule({
 
       gitlabMergeRequests: async (
         _: any,
-        { projectId, state, limit = 20 }: { projectId: string; state?: string; limit: number }
+        { projectId, state, limit = 20, offset = 0, search }: { projectId: string; state?: string; limit: number; offset: number; search?: string }
       ) => {
         // Convert projectId string to number for MongoDB query
         const projectIdNum = parseInt(projectId, 10);
         const filter: any = { projectId: projectIdNum };
         if (state) filter.state = state;
+        if (search?.trim()) {
+          const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const searchRegex = new RegExp(escapedSearch, 'i');
 
-        return await MergeRequest.find(filter)
-          .limit(limit)
-          .sort({ updatedAt: -1 })
-          .lean();
+          filter.$or = [
+            { title: searchRegex },
+            { description: searchRegex },
+            { sourceBranch: searchRegex },
+            { targetBranch: searchRegex },
+          ];
+        }
+
+        const [mergeRequests, totalCount] = await Promise.all([
+          MergeRequest.find(filter)
+            .limit(limit)
+            .skip(offset)
+            .sort({ updatedAt: -1 })
+            .lean(),
+          MergeRequest.countDocuments(filter),
+        ]);
+
+        return {
+          mergeRequests,
+          totalCount,
+        };
       },
     },
 

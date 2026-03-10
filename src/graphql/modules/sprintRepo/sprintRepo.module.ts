@@ -7,6 +7,10 @@ import { logger } from '../../../utils/logger';
 import { getAccessibleSprintRepoIds } from '../../../utils/rbac';
 import mongoose from 'mongoose';
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export const sprintRepoModule = createModule({
   id: 'sprintRepo',
   typeDefs: gql`
@@ -62,10 +66,23 @@ export const sprintRepoModule = createModule({
       endDate: DateTime
     }
 
+    type SprintReposResult {
+      sprintRepos: [SprintRepo!]!
+      totalCount: Int!
+    }
+
     extend type Query {
       sprintRepo(id: ID!, userId: ID, userRole: String): SprintRepo
       sprintRepoByKey(key: String!, userId: ID, userRole: String): SprintRepo
-      sprintRepos(limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): [SprintRepo!]!
+      sprintRepos(
+        limit: Int = 20
+        offset: Int = 0
+        status: SprintRepoStatus
+        groupName: String
+        search: String
+        userId: ID
+        userRole: String
+      ): SprintReposResult!
       sprintReposByGroup(groupId: String!, status: SprintRepoStatus, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
       sprintReposByOwner(ownerId: String!, status: SprintRepoStatus, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
       sprintReposByStatus(status: SprintRepoStatus!, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
@@ -165,9 +182,28 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      sprintRepos: async (_: any, { limit, offset, userId, userRole }: { limit: number; offset: number; userId?: string; userRole?: string }) => {
+      sprintRepos: async (
+        _: any,
+        {
+          limit,
+          offset,
+          status,
+          groupName,
+          search,
+          userId,
+          userRole,
+        }: {
+          limit: number;
+          offset: number;
+          status?: string;
+          groupName?: string;
+          search?: string;
+          userId?: string;
+          userRole?: string;
+        }
+      ) => {
         try {
-          const filter: any = { isActive: true };
+          const andConditions: Record<string, unknown>[] = [{ isActive: true }];
 
           // Apply role-based filtering if userId and userRole are provided
           if (userId && userRole) {
@@ -175,22 +211,62 @@ export const sprintRepoModule = createModule({
             
             // If user has no access, return empty array
             if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
+              return {
+                sprintRepos: [],
+                totalCount: 0,
+              };
             }
             
             // If not admin and has accessible repos, filter by them
             if (accessibleSprintRepoIds.length > 0) {
-              filter._id = { $in: accessibleSprintRepoIds.map(id => new mongoose.Types.ObjectId(id)) };
+              andConditions.push({
+                _id: {
+                  $in: accessibleSprintRepoIds
+                    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                    .map((id) => new mongoose.Types.ObjectId(id)),
+                },
+              });
             }
           }
 
-          return await SprintRepo.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(limit)
-            .skip(offset)
-            .lean();
+          if (status) {
+            andConditions.push({ status: status.toLowerCase() });
+          }
+
+          if (groupName) {
+            andConditions.push({ groupName });
+          }
+
+          if (search?.trim()) {
+            const searchRegex = new RegExp(escapeRegex(search.trim()), 'i');
+            andConditions.push({
+              $or: [
+                { name: searchRegex },
+                { key: searchRegex },
+                { ownerName: searchRegex },
+                { groupName: searchRegex },
+                { description: searchRegex },
+              ],
+            });
+          }
+
+          const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+
+          const [sprintRepos, totalCount] = await Promise.all([
+            SprintRepo.find(filter)
+              .sort({ createdAt: -1 })
+              .limit(limit)
+              .skip(offset)
+              .lean(),
+            SprintRepo.countDocuments(filter),
+          ]);
+
+          return {
+            sprintRepos,
+            totalCount,
+          };
         } catch (error) {
-          logger.error('Error fetching sprint repositories', { limit, offset, userId, error });
+          logger.error('Error fetching sprint repositories', { limit, offset, status, groupName, search, userId, error });
           throw new AppError('Failed to fetch sprint repositories', 500);
         }
       },

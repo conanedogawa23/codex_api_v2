@@ -169,6 +169,11 @@ export const taskModule = createModule({
       statusSummary: TaskSummary!
     }
 
+    type TasksByProjectResult {
+      tasks: [TaskDetails!]!
+      totalCount: Int!
+    }
+
     input TaskFilterInput {
       projectId: String
       status: [TaskStatus]
@@ -229,7 +234,7 @@ export const taskModule = createModule({
         offset: Int = 0
       ): [Task!]!
       tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): TaskFilterResult!
-      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20, userId: ID, userRole: String): [TaskDetails!]!
+      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): TasksByProjectResult!
       tasksBySprint(sprintId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
       backlogTasks(projectId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
       backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
@@ -408,7 +413,7 @@ export const taskModule = createModule({
 
       tasksByProject: async (
         _: any,
-        { projectId, status, limit = 20, userId, userRole }: { projectId: string; status?: string; limit: number; userId?: string; userRole?: string }
+        { projectId, status, limit = 20, offset = 0, userId, userRole }: { projectId: string; status?: string; limit: number; offset: number; userId?: string; userRole?: string }
       ) => {
         // Apply RBAC: verify user can access this project
         if (userId && userRole) {
@@ -416,7 +421,10 @@ export const taskModule = createModule({
           if (!rbacResult.isAdminUser) {
             if (!rbacResult.projectIds.includes(projectId)) {
               logger.info('Non-admin user denied access to project tasks', { userId, userRole, projectId });
-              return [];
+              return {
+                tasks: [],
+                totalCount: 0,
+              };
             }
           }
         }
@@ -436,12 +444,20 @@ export const taskModule = createModule({
         // Convert GraphQL enum to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
 
-        const results = await tasksCollection
-          .find(filter)
-          .sort({ priority: -1, dueDate: 1, _id: 1 })
-          .limit(limit)
-          .toArray();
-        return results;
+        const [results, totalCount] = await Promise.all([
+          tasksCollection
+            .find(filter)
+            .sort({ priority: -1, dueDate: 1, _id: 1 })
+            .skip(offset)
+            .limit(limit)
+            .toArray(),
+          tasksCollection.countDocuments(filter),
+        ]);
+
+        return {
+          tasks: results,
+          totalCount,
+        };
       },
 
       tasksByFilter: async (

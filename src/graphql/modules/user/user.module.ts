@@ -104,6 +104,11 @@ export const userModule = createModule({
       updatedAt: DateTime!
     }
 
+    type OrganizationUsersResult {
+      users: [OrganizationUser!]!
+      totalCount: Int!
+    }
+
     enum UserStatus {
       ACTIVE
       INACTIVE
@@ -253,7 +258,7 @@ export const userModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [User!]!
-      organizationUsers(filter: UserFilterInput): [OrganizationUser!]!
+      organizationUsers(filter: UserFilterInput): OrganizationUsersResult!
       userByEmail(email: String!): User
       userByGitlabId(gitlabId: Int!): User
       userSettings(userId: ID!): UserSettings
@@ -355,44 +360,59 @@ export const userModule = createModule({
         return user;
       },
       organizationUsers: async (_: any, { filter }: { filter?: any }) => {
-        const query: any = {};
-        
-        // Apply filters if provided
-        if (filter) {
-          if (filter.status !== undefined) {
-            // Convert GraphQL enum to DB format
-            query.status = filter.status.toLowerCase().replace(/_/g, '-');
+        try {
+          const query: any = {};
+
+          // Apply filters if provided
+          if (filter) {
+            if (filter.status !== undefined) {
+              // Convert GraphQL enum to DB format
+              query.status = filter.status.toLowerCase().replace(/_/g, '-');
+            }
+            if (filter.department !== undefined) {
+              query.department = filter.department;
+            }
+            if (filter.role !== undefined) {
+              query.role = filter.role;
+            }
+            if (filter.isActive !== undefined) {
+              query.isActive = filter.isActive;
+            }
+            if (filter.search) {
+              // Search in name, email, or username
+              query.$or = [
+                { name: { $regex: filter.search, $options: 'i' } },
+                { email: { $regex: filter.search, $options: 'i' } },
+                { username: { $regex: filter.search, $options: 'i' } }
+              ];
+            }
+          } else {
+            // Default: only active users if no filter provided
+            query.isActive = true;
           }
-          if (filter.department !== undefined) {
-            query.department = filter.department;
-          }
-          if (filter.role !== undefined) {
-            query.role = filter.role;
-          }
-          if (filter.isActive !== undefined) {
-            query.isActive = filter.isActive;
-          }
-          if (filter.search) {
-            // Search in name, email, or username
-            query.$or = [
-              { name: { $regex: filter.search, $options: 'i' } },
-              { email: { $regex: filter.search, $options: 'i' } },
-              { username: { $regex: filter.search, $options: 'i' } }
-            ];
-          }
-        } else {
-          // Default: only active users if no filter provided
-          query.isActive = true;
+
+          const limit = filter?.limit || 100;
+          const offset = filter?.offset || 0;
+          const [users, totalCount] = await Promise.all([
+            User.find(query)
+              .limit(limit)
+              .skip(offset)
+              .sort({ name: 1 })
+              .lean(),
+            User.countDocuments(query),
+          ]);
+
+          return {
+            users,
+            totalCount,
+          };
+        } catch (error) {
+          logger.error('Error fetching organization users', {
+            filter,
+            error,
+          });
+          throw new AppError('Failed to fetch organization users', 500);
         }
-        
-        const limit = filter?.limit || 100;
-        const offset = filter?.offset || 0;
-        
-        return await User.find(query)
-          .limit(limit)
-          .skip(offset)
-          .sort({ name: 1 })
-          .lean();
       },
       userByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
         const user = await User.findByGitlabId(gitlabId);

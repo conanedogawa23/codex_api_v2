@@ -43,6 +43,11 @@ export const pipelineModule = createModule({
       scheduled
     }
 
+    type PipelinesByProjectResult {
+      pipelines: [Pipeline!]!
+      totalCount: Int!
+    }
+
     extend type Query {
       pipeline(id: ID!): Pipeline
       pipelineByGitlabId(gitlabId: Int!): Pipeline
@@ -53,7 +58,7 @@ export const pipelineModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Pipeline!]!
-      pipelinesByProject(projectId: String!, status: PipelineStatus, limit: Int = 20): [Pipeline!]!
+      pipelinesByProject(projectId: String!, status: PipelineStatus, limit: Int = 20, offset: Int = 0): PipelinesByProjectResult!
     }
   `,
   resolvers: {
@@ -99,15 +104,24 @@ export const pipelineModule = createModule({
 
       pipelinesByProject: async (
         _: any,
-        { projectId, status, limit = 20 }: { projectId: string; status?: string; limit: number }
+        { projectId, status, limit = 20, offset = 0 }: { projectId: string; status?: string; limit: number; offset: number }
       ) => {
         const filter: any = { projectId };
         if (status) filter.status = status;
 
-        return await Pipeline.find(filter)
-          .limit(limit)
-          .sort({ createdAt: -1 })
-          .lean();
+        const [pipelines, totalCount] = await Promise.all([
+          Pipeline.find(filter)
+            .limit(limit)
+            .skip(offset)
+            .sort({ createdAt: -1 })
+            .lean(),
+          Pipeline.countDocuments(filter),
+        ]);
+
+        return {
+          pipelines,
+          totalCount,
+        };
       },
     },
   },

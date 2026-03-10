@@ -7,6 +7,12 @@ import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { getAccessibleProjectIds } from '../../../utils/rbac';
 
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeProjectEnumValue = (value?: string, fallback?: string): string =>
+  (value || fallback || '').replace(/-/g, '_').toUpperCase();
+
 export const commitModule = createModule({
   id: 'commit',
   typeDefs: gql`
@@ -44,12 +50,29 @@ export const commitModule = createModule({
       lastCommitDate: DateTime
     }
 
+    type ProjectsWithCommitActivityResult {
+      projects: [ProjectCommitActivity!]!
+      totalCount: Int!
+    }
+
     extend type Query {
       commit(sha: String!): Commit
       commits(projectId: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
       commitsByProject(projectId: String!, limit: Int = 20): [Commit!]!
       commitsByAuthor(authorEmail: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
-      projectsWithCommitActivity(username: String!, days: Int = 30, userId: ID, userRole: String): [ProjectCommitActivity!]!
+      projectsWithCommitActivity(
+        username: String!
+        days: Int = 30
+        limit: Int = 20
+        offset: Int = 0
+        search: String
+        namespace: String
+        status: ProjectStatus
+        priority: ProjectPriority
+        recentOnly: Boolean = false
+        userId: ID
+        userRole: String
+      ): ProjectsWithCommitActivityResult!
     }
   `,
   resolvers: {
@@ -99,8 +122,47 @@ export const commitModule = createModule({
           .lean();
       },
 
-      projectsWithCommitActivity: async (_: any, { username, days = 30, userId, userRole }: { username: string; days: number; userId?: string; userRole?: string }) => {
-        logger.info('Fetching projects with commit activity', { username, days, userId, userRole });
+      projectsWithCommitActivity: async (
+        _: any,
+        {
+          username,
+          days = 30,
+          limit = 20,
+          offset = 0,
+          search,
+          namespace,
+          status,
+          priority,
+          recentOnly = false,
+          userId,
+          userRole,
+        }: {
+          username: string;
+          days: number;
+          limit: number;
+          offset: number;
+          search?: string;
+          namespace?: string;
+          status?: string;
+          priority?: string;
+          recentOnly?: boolean;
+          userId?: string;
+          userRole?: string;
+        }
+      ) => {
+        logger.info('Fetching projects with commit activity', {
+          username,
+          days,
+          limit,
+          offset,
+          search,
+          namespace,
+          status,
+          priority,
+          recentOnly,
+          userId,
+          userRole,
+        });
         
         try {
           // Find user by username to get their email
@@ -120,7 +182,10 @@ export const commitModule = createModule({
             if (!isAdminUser) {
               if (projectIds.length === 0) {
                 logger.info('Non-admin user has no accessible projects', { userId });
-                return [];
+                return {
+                  projects: [],
+                  totalCount: 0,
+                };
               }
               projectFilter._id = { $in: projectIds };
             }
@@ -164,10 +229,51 @@ export const commitModule = createModule({
               }
             ])
           );
+
+          const searchRegex = search?.trim()
+            ? new RegExp(escapeRegex(search.trim()), 'i')
+            : null;
+
+          let filteredProjects = allProjects.filter((project: any) => {
+            if (status) {
+              const normalizedStatus = normalizeProjectEnumValue(project.status, 'planned');
+              if (normalizedStatus !== status) {
+                return false;
+              }
+            }
+
+            if (priority) {
+              const normalizedPriority = normalizeProjectEnumValue(project.priority, 'medium');
+              if (normalizedPriority !== priority) {
+                return false;
+              }
+            }
+
+            if (searchRegex) {
+              const matchesSearch =
+                searchRegex.test(project.name || '') ||
+                searchRegex.test(project.description || '');
+
+              if (!matchesSearch) {
+                return false;
+              }
+            }
+
+            if (recentOnly) {
+              const projectIdStr = project.gitlabId?.toString() || '';
+              const activity = commitActivityMap.get(projectIdStr);
+
+              if ((activity?.commitCount || 0) === 0) {
+                return false;
+              }
+            }
+
+            return true;
+          });
           
           // Batch-fetch all namespaces in a single query to avoid N+1 per-project lookups
           const namespaceIds = [...new Set(
-            allProjects
+            filteredProjects
               .map((p: any) => p.namespace?.id)
               .filter((id: any) => id != null)
           )];
@@ -194,7 +300,7 @@ export const commitModule = createModule({
           };
           
           // Build results: attach batch-resolved namespace to skip per-project DB lookups
-          const results = allProjects.map((project: any) => {
+          let results = filteredProjects.map((project: any) => {
             const projectIdStr = project.gitlabId?.toString() || '';
             const activity = commitActivityMap.get(projectIdStr);
             
@@ -207,6 +313,13 @@ export const commitModule = createModule({
               lastCommitDate: activity?.lastCommitDate || null
             };
           });
+
+          if (namespace?.trim()) {
+            const namespaceRegex = new RegExp(`^${escapeRegex(namespace.trim())}$`, 'i');
+            results = results.filter((result: any) =>
+              namespaceRegex.test(result.project._namespaceBatchResolved?.name || '')
+            );
+          }
           
           // Sort by commit count descending, then by last commit date
           results.sort((a, b) => {
@@ -220,15 +333,22 @@ export const commitModule = createModule({
             if (b.lastCommitDate) return 1;
             return 0;
           });
+
+          const totalCount = results.length;
+          const paginatedResults = results.slice(offset, offset + limit);
           
           logger.info('Fetched projects with commit activity', { 
             username, 
             days,
-            totalProjects: results.length,
-            projectsWithCommits: results.filter(r => r.commitCount > 0).length
+            totalProjects: totalCount,
+            projectsWithCommits: results.filter(r => r.commitCount > 0).length,
+            returnedProjects: paginatedResults.length,
           });
           
-          return results;
+          return {
+            projects: paginatedResults,
+            totalCount,
+          };
         } catch (error) {
           logger.error('Error fetching projects with commit activity', { 
             username, 
