@@ -12,6 +12,15 @@ export interface VLLMToolDefinition {
   };
 }
 
+export type VLLMToolChoice =
+  | 'auto'
+  | {
+      type: 'function';
+      function: {
+        name: string;
+      };
+    };
+
 export interface VLLMMessage {
   role: 'assistant' | 'system' | 'tool' | 'user';
   content: string;
@@ -72,6 +81,7 @@ export class VLLMProxy {
   public async chatCompletion(options: {
     messages: VLLMMessage[];
     tools?: VLLMToolDefinition[];
+    toolChoice?: VLLMToolChoice;
     temperature?: number;
     maxTokens?: number;
   }): Promise<VLLMChatResponse> {
@@ -81,7 +91,7 @@ export class VLLMProxy {
           model: this.config.model,
           messages: options.messages as any,
           tools: options.tools as any,
-          tool_choice: options.tools?.length ? 'auto' : undefined,
+          tool_choice: options.toolChoice ?? (options.tools?.length ? 'auto' : undefined),
           temperature: options.temperature ?? 0.1,
           max_tokens: options.maxTokens ?? 2000,
           stream: false,

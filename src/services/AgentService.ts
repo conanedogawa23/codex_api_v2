@@ -2,16 +2,52 @@ import mongoose from 'mongoose';
 
 import { AppError } from '../middleware';
 import { Project } from '../models/Project';
-import { ChatSession, IChatMessage, IChatSession } from '../models/ChatSession';
+import { ChatSession, IChatMessage } from '../models/ChatSession';
 import { logger } from '../utils/logger';
 import { AuthenticatedUser } from '../utils/auth';
 
 import { chatPubSub, getChatStreamTopic } from './chatPubSub';
 import { mcpBridge } from './MCPBridge';
-import { VLLMMessage, vllmProxy } from './VLLMProxy';
+import { VLLMMessage, VLLMToolChoice, VLLMToolDefinition, vllmProxy } from './VLLMProxy';
 
 const MAX_TOOL_ITERATIONS = 10;
 const PROJECT_ID_ARGUMENT_KEYS = new Set(['project_id', 'projectId', 'source_project_id', 'target_project_id']);
+const REPOSITORY_READING_TOOL_NAME = 'get_file_contents';
+const REPOSITORY_INSPECTION_PATTERNS = [
+  /\bcode\b/i,
+  /\bfile\b/i,
+  /\bfiles\b/i,
+  /\bfunction\b/i,
+  /\bclass\b/i,
+  /\bmodule\b/i,
+  /\bservice\b/i,
+  /\bcomponent\b/i,
+  /\bschema\b/i,
+  /\bresolver\b/i,
+  /\bconfig\b/i,
+  /\bimplementation\b/i,
+  /\bsource\b/i,
+  /\bimport\b/i,
+  /\bexport\b/i,
+  /\broute\b/i,
+  /\bendpoint\b/i,
+  /\bfolder\b/i,
+  /\bdirectory\b/i,
+  /\bpath\b/i,
+  /\brepository structure\b/i,
+  /\bhow does\b/i,
+  /\bwhere (?:is|are|does|do)\b/i,
+  /\bsearch\b/i,
+  /\bscan\b/i,
+  /\btrace\b/i,
+  /\bdebug\b/i,
+  /\berror\b/i,
+  /\bstack trace\b/i,
+  /\bpackage\.json\b/i,
+  /\btsconfig\b/i,
+  /\bDockerfile\b/i,
+  /\bREADME\b/i,
+];
 
 interface ProjectToolContext {
   databaseId: string;
@@ -33,12 +69,15 @@ export class AgentService {
 
     const projectContext = await this.resolveProjectContext(session.projectId?.toString());
     const tools = await mcpBridge.listToolsAsVLLMFunctions();
+    const latestUserMessage = this.getLatestUserMessage(session.messages);
+    const mustInspectRepository = this.shouldInspectRepository(latestUserMessage, projectContext, tools);
     const messages: VLLMMessage[] = [
       this.buildSystemMessage(currentUser, projectContext),
       ...this.toVLLMMessages(session.messages),
     ];
 
     let iterations = 0;
+    let repositoryInspected = false;
 
     try {
       while (iterations < MAX_TOOL_ITERATIONS) {
@@ -47,11 +86,24 @@ export class AgentService {
         const response = await vllmProxy.chatCompletion({
           messages,
           tools,
+          toolChoice: this.resolveToolChoice(tools, mustInspectRepository, repositoryInspected),
           temperature: 0,
           maxTokens: 2000,
         });
 
         if (response.toolCalls.length === 0) {
+          if (mustInspectRepository && !repositoryInspected) {
+            messages.push({
+              role: 'user',
+              content: [
+                'Before answering, inspect the relevant repository files or directories using get_file_contents.',
+                'Start with the most likely path for this question, or inspect a directory/root path first if the exact file is unclear.',
+                'Do not answer from memory alone.',
+              ].join(' '),
+            });
+            continue;
+          }
+
           break;
         }
 
@@ -76,6 +128,10 @@ export class AgentService {
         });
 
         for (const toolCall of response.toolCalls) {
+          if (toolCall.name === REPOSITORY_READING_TOOL_NAME) {
+            repositoryInspected = true;
+          }
+
           await this.publishChunk({
             sessionId: session.id,
             content: '',
@@ -179,6 +235,7 @@ export class AgentService {
     const prompt = [
       'You are Codex AI, an internal engineering assistant.',
       'Use the available GitLab MCP tools before making assumptions about repositories, issues, merge requests, pipelines, milestones, or wiki pages.',
+      'When the user asks about repository code, files, implementation details, configuration, or debugging, inspect the relevant GitLab repository files with get_file_contents before answering.',
       'If a repository-scoped tool expects a project identifier, prefer the GitLab numeric project id. If a path is accepted, prefer path_with_namespace.',
       'Keep answers concise, actionable, and grounded in tool output.',
       `Current user: ${currentUser.username} (${currentUser.role}, ${currentUser.department})`,
@@ -239,6 +296,57 @@ export class AgentService {
       name: project.name,
       pathWithNamespace: project.pathWithNamespace,
     };
+  }
+
+  private getLatestUserMessage(messages: IChatMessage[]): string | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') {
+        return messages[index].content;
+      }
+    }
+
+    return null;
+  }
+
+  private shouldInspectRepository(
+    latestUserMessage: string | null,
+    projectContext: ProjectToolContext | null,
+    tools: VLLMToolDefinition[]
+  ): boolean {
+    if (!latestUserMessage || !projectContext) {
+      return false;
+    }
+
+    if (!tools.some((tool) => tool.function.name === REPOSITORY_READING_TOOL_NAME)) {
+      return false;
+    }
+
+    return REPOSITORY_INSPECTION_PATTERNS.some((pattern) => pattern.test(latestUserMessage));
+  }
+
+  private resolveToolChoice(
+    tools: VLLMToolDefinition[],
+    mustInspectRepository: boolean,
+    repositoryInspected: boolean
+  ): VLLMToolChoice | undefined {
+    if (!tools.length) {
+      return undefined;
+    }
+
+    if (
+      mustInspectRepository &&
+      !repositoryInspected &&
+      tools.some((tool) => tool.function.name === REPOSITORY_READING_TOOL_NAME)
+    ) {
+      return {
+        type: 'function',
+        function: {
+          name: REPOSITORY_READING_TOOL_NAME,
+        },
+      };
+    }
+
+    return 'auto';
   }
 
   private normalizeToolArguments(
