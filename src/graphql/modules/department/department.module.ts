@@ -16,6 +16,13 @@ type DepartmentMemberUser = {
   userType?: string;
 };
 
+type DepartmentProjectRecord = {
+  _id: { toString(): string };
+  department?: string;
+  gitlabId?: number | null;
+  isActive?: boolean;
+};
+
 const ACTIVE_HUMAN_DEPARTMENT_MEMBER_FILTER = {
   isActive: true,
   $or: [
@@ -71,6 +78,46 @@ async function findUserByDepartmentMemberIdentifier(memberIdentifier: string) {
 
   if (/^\d+$/.test(trimmedIdentifier)) {
     return User.findOne({ gitlabId: Number(trimmedIdentifier) });
+  }
+
+  return null;
+}
+
+function buildDepartmentProjectIdentifier(project: DepartmentProjectRecord): string {
+  if (project.gitlabId !== undefined && project.gitlabId !== null) {
+    return project.gitlabId.toString();
+  }
+
+  return project._id.toString();
+}
+
+function buildDepartmentProjectAliases(project: DepartmentProjectRecord): string[] {
+  const identifiers = [project._id.toString()];
+
+  if (project.gitlabId !== undefined && project.gitlabId !== null) {
+    identifiers.push(project.gitlabId.toString());
+  }
+
+  return identifiers;
+}
+
+async function findProjectByDepartmentProjectIdentifier(projectIdentifier: string) {
+  const trimmedIdentifier = projectIdentifier.trim();
+
+  if (!trimmedIdentifier) {
+    return null;
+  }
+
+  if (mongoose.Types.ObjectId.isValid(trimmedIdentifier)) {
+    const projectById = await Project.findById(trimmedIdentifier);
+
+    if (projectById) {
+      return projectById;
+    }
+  }
+
+  if (/^\d+$/.test(trimmedIdentifier)) {
+    return Project.findOne({ gitlabId: Number(trimmedIdentifier) });
   }
 
   return null;
@@ -231,20 +278,50 @@ export const departmentModule = createModule({
         if (!parent.projects || parent.projects.length === 0) {
           return [];
         }
-        
-        // Convert string IDs to numbers for gitlabId query
-        const gitlabIds = parent.projects.map((id: string) => parseInt(id)).filter((id: number) => !isNaN(id));
-        
-        if (gitlabIds.length === 0) {
+
+        const projectIdentifiers: string[] = parent.projects;
+        const gitlabIds = projectIdentifiers
+          .filter((id: string) => /^\d+$/.test(id))
+          .map((id: string) => Number(id));
+        const objectIds = projectIdentifiers
+          .filter((id: string) => mongoose.Types.ObjectId.isValid(id))
+          .map((id: string) => new mongoose.Types.ObjectId(id));
+
+        if (gitlabIds.length === 0 && objectIds.length === 0) {
           return [];
         }
-        
-        const projects = await Project.find({ 
-          gitlabId: { $in: gitlabIds },
-          isActive: true 
+
+        const identifierFilter: Array<Record<string, unknown>> = [];
+
+        if (gitlabIds.length > 0) {
+          identifierFilter.push({ gitlabId: { $in: gitlabIds } });
+        }
+
+        if (objectIds.length > 0) {
+          identifierFilter.push({ _id: { $in: objectIds } });
+        }
+
+        const projects = await Project.find({
+          $and: [
+            { isActive: true },
+            { $or: identifierFilter },
+          ],
         }).lean();
-        
-        return projects;
+
+        const projectOrder = new Map(
+          projectIdentifiers.map((identifier: string, index: number) => [identifier, index])
+        );
+
+        return projects.sort((left, right) => {
+          const leftIndex = buildDepartmentProjectAliases(left)
+            .map((identifier) => projectOrder.get(identifier))
+            .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+          const rightIndex = buildDepartmentProjectAliases(right)
+            .map((identifier) => projectOrder.get(identifier))
+            .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+
+          return leftIndex - rightIndex;
+        });
       },
       
       // Resolve namespace if linked
@@ -462,10 +539,55 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
-        await department.addProject(projectId);
+        const project = await findProjectByDepartmentProjectIdentifier(projectId);
+
+        if (!project) {
+          throw new AppError(`Project with identifier ${projectId} not found`, 404);
+        }
+
+        if (project.isActive === false) {
+          throw new AppError(`Cannot add inactive project ${projectId} to department`, 400);
+        }
+
+        const projectIdentifier = buildDepartmentProjectIdentifier(project);
+        const projectAliases = buildDepartmentProjectAliases(project);
+        const projectAliasSet = new Set(projectAliases);
+        const firstExistingIndex = department.projects.findIndex((storedProjectId: string) =>
+          projectAliasSet.has(storedProjectId)
+        );
+
+        if (firstExistingIndex === -1) {
+          department.projects.push(projectIdentifier);
+        } else {
+          department.projects = department.projects.filter((storedProjectId: string, index: number) => {
+            return index === firstExistingIndex || !projectAliasSet.has(storedProjectId);
+          });
+          department.projects[firstExistingIndex] = projectIdentifier;
+        }
+
+        const reassignmentResult = await Department.updateMany(
+          {
+            _id: { $ne: department._id },
+            projects: { $in: projectAliases },
+          },
+          {
+            $pull: {
+              projects: { $in: projectAliases },
+            },
+          }
+        );
+
+        await department.save();
+        project.department = department.name;
+        await project.save();
         
         const updated = await Department.findById(departmentId).lean();
-        logger.info('Project added to department successfully', { departmentId, projectId });
+        logger.info('Project added to department successfully', {
+          departmentId,
+          projectId,
+          reassignedDepartmentCount: reassignmentResult.modifiedCount || 0,
+          storedProjectIdentifier: projectIdentifier,
+        });
         return updated!;
       },
 
@@ -478,10 +600,29 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
-        await department.removeProject(projectId);
+        const project = await findProjectByDepartmentProjectIdentifier(projectId);
+        const identifiersToRemove = new Set([projectId]);
+
+        if (project) {
+          buildDepartmentProjectAliases(project).forEach((identifier) => identifiersToRemove.add(identifier));
+        }
+
+        department.projects = department.projects.filter(
+          (storedProjectId: string) => !identifiersToRemove.has(storedProjectId)
+        );
+        await department.save();
+
+        if (project && project.department === department.name) {
+          project.department = '';
+          await project.save();
+        }
         
         const updated = await Department.findById(departmentId).lean();
-        logger.info('Project removed from department successfully', { departmentId, projectId });
+        logger.info('Project removed from department successfully', {
+          departmentId,
+          projectId,
+          removedIdentifiers: Array.from(identifiersToRemove),
+        });
         return updated!;
       },
 

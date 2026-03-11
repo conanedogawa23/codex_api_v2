@@ -7,8 +7,26 @@ import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { gitlabApi } from '../../../utils/gitlabApi';
-import { isAdmin, getAccessibleProjectIds, extractGitlabIdFromGid } from '../../../utils/rbac';
+import { getAccessibleProjectIds, extractGitlabIdFromGid } from '../../../utils/rbac';
 import mongoose from 'mongoose';
+
+type DepartmentProjectReference = {
+  _id: { toString(): string };
+  gitlabId?: number | null;
+};
+
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function buildDepartmentProjectAliases(project: DepartmentProjectReference): string[] {
+  const identifiers = [project._id.toString()];
+
+  if (project.gitlabId !== undefined && project.gitlabId !== null) {
+    identifiers.push(project.gitlabId.toString());
+  }
+
+  return identifiers;
+}
 
 export const projectModule = createModule({
   id: 'project',
@@ -158,10 +176,24 @@ export const projectModule = createModule({
       message: String!
     }
 
+    input ProjectFilterInput {
+      status: ProjectStatus
+      isActive: Boolean
+      search: String
+      limit: Int
+      offset: Int
+    }
+
+    type OrganizationProjectsResult {
+      projects: [ProjectDetails!]!
+      totalCount: Int!
+    }
+
     extend type Query {
       project(id: ID!): Project
       projectDetails(projectId: ID!): ProjectDetails
       projectByGitlabId(gitlabId: Int!): Project
+      organizationProjects(filter: ProjectFilterInput): OrganizationProjectsResult!
       projects(
         status: ProjectStatus
         priority: ProjectPriority
@@ -401,6 +433,70 @@ export const projectModule = createModule({
         return project;
       },
 
+      organizationProjects: async (
+        _: any,
+        {
+          filter,
+        }: {
+          filter?: {
+            isActive?: boolean;
+            limit?: number;
+            offset?: number;
+            search?: string;
+            status?: string;
+          };
+        }
+      ) => {
+        try {
+          const query: any = {};
+
+          if (filter) {
+            if (filter.status !== undefined) {
+              query.status = filter.status.toLowerCase().replace(/_/g, '-');
+            }
+
+            if (filter.isActive !== undefined) {
+              query.isActive = filter.isActive;
+            }
+
+            if (filter.search?.trim()) {
+              const escapedSearch = escapeRegex(filter.search.trim());
+
+              query.$or = [
+                { name: { $regex: escapedSearch, $options: 'i' } },
+                { nameWithNamespace: { $regex: escapedSearch, $options: 'i' } },
+              ];
+            }
+          } else {
+            query.isActive = true;
+          }
+
+          const limit = filter?.limit || 100;
+          const offset = filter?.offset || 0;
+
+          const [projects, totalCount] = await Promise.all([
+            Project.find(query)
+              .select('gitlabId name nameWithNamespace description defaultBranch visibility webUrl httpUrlToRepo sshUrlToRepo pathWithNamespace namespace status progress priority category department deadline tasks budget assignedTo createdAt updatedAt lastActivityAt lastSynced isActive')
+              .limit(limit)
+              .skip(offset)
+              .sort({ lastActivityAt: -1 })
+              .lean(),
+            Project.countDocuments(query),
+          ]);
+
+          return {
+            projects,
+            totalCount,
+          };
+        } catch (error) {
+          logger.error('Error fetching organization projects', {
+            error,
+            filter,
+          });
+          throw new AppError('Failed to fetch organization projects', 500);
+        }
+      },
+
       projects: async (
         _: any,
         { status, priority, department, category, limit = 20, offset = 0, userId, userRole }: any
@@ -494,20 +590,34 @@ export const projectModule = createModule({
           logger.info('No projects found for department', { department });
           return [];
         }
-        
-        // Convert project gitlabId strings to numbers
-        const gitlabIds = dept.projects
-          .map((id: string) => parseInt(id))
-          .filter((id: number) => !isNaN(id));
-        
-        if (gitlabIds.length === 0) {
+
+        const projectIdentifiers: string[] = dept.projects;
+        const gitlabIds = projectIdentifiers
+          .filter((id: string) => /^\d+$/.test(id))
+          .map((id: string) => Number(id));
+        const objectIds = projectIdentifiers
+          .filter((id: string) => mongoose.Types.ObjectId.isValid(id))
+          .map((id: string) => new mongoose.Types.ObjectId(id));
+
+        if (gitlabIds.length === 0 && objectIds.length === 0) {
           return [];
         }
-        
-        // Build filter
+
+        const identifierFilter: Array<Record<string, unknown>> = [];
+
+        if (gitlabIds.length > 0) {
+          identifierFilter.push({ gitlabId: { $in: gitlabIds } });
+        }
+
+        if (objectIds.length > 0) {
+          identifierFilter.push({ _id: { $in: objectIds } });
+        }
+
         const filter: any = {
-          gitlabId: { $in: gitlabIds },
-          isActive: true,
+          $and: [
+            { isActive: true },
+            { $or: identifierFilter },
+          ],
         };
         
         // Apply role-based filtering using user.projects[] -> gitlabIds
@@ -518,22 +628,34 @@ export const projectModule = createModule({
               logger.info('Non-admin user has no accessible projects for department query', { userId });
               return [];
             }
-            filter._id = { $in: result.projectIds };
+            filter.$and.push({ _id: { $in: result.projectIds } });
             logger.info('Applying user-based filter for department query', { userId, userRole, department });
           }
         }
         
-        // Query projects by gitlabId
         const projects = await Project.find(filter)
           .sort({ lastActivityAt: -1 })
           .lean();
+
+        const projectOrder = new Map(
+          projectIdentifiers.map((identifier: string, index: number) => [identifier, index])
+        );
         
         logger.info('Found projects for department', { 
           department, 
           projectCount: projects.length 
         });
         
-        return projects;
+        return projects.sort((left, right) => {
+          const leftIndex = buildDepartmentProjectAliases(left)
+            .map((identifier) => projectOrder.get(identifier))
+            .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+          const rightIndex = buildDepartmentProjectAliases(right)
+            .map((identifier) => projectOrder.get(identifier))
+            .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+
+          return leftIndex - rightIndex;
+        });
       },
     },
 
