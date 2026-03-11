@@ -15,7 +15,7 @@ export interface IDepartment extends Document {
     name: string;
     email: string;
   };
-  members: string[]; // User GitLab IDs as strings
+  members: string[]; // User membership identifiers (GitLab IDs or MongoDB user IDs)
   projects: string[]; // Project GitLab IDs as strings
   budget?: number;
   location?: string;
@@ -59,7 +59,7 @@ const DepartmentSchema: Schema = new Schema({
     email: String
   },
   members: [{
-    type: String, // User GitLab IDs as strings
+    type: String, // User membership identifiers (GitLab IDs or MongoDB user IDs)
     ref: 'User'
   }],
   projects: [{

@@ -1,4 +1,5 @@
 import { createModule, gql } from 'graphql-modules';
+import mongoose from 'mongoose';
 import { Department } from '../../../models/Department';
 import { User } from '../../../models/User';
 import { Project } from '../../../models/Project';
@@ -6,6 +7,74 @@ import { Namespace } from '../../../models/Namespace';
 import { AppError } from '../../../middleware';
 import { logger } from '../../../utils/logger';
 import { fixDepartmentData } from '../../../utils/migrations/fixDepartmentData';
+
+type DepartmentMemberUser = {
+  _id: { toString(): string };
+  gitlabId?: number | null;
+  isActive?: boolean;
+  userSource?: string;
+  userType?: string;
+};
+
+const ACTIVE_HUMAN_DEPARTMENT_MEMBER_FILTER = {
+  isActive: true,
+  $or: [
+    { userType: 'human' },
+    { userType: { $exists: false }, userSource: 'manual' },
+  ],
+};
+
+function buildDepartmentMemberIdentifier(user: DepartmentMemberUser): string {
+  if (user.gitlabId !== undefined && user.gitlabId !== null) {
+    return user.gitlabId.toString();
+  }
+
+  return user._id.toString();
+}
+
+function buildDepartmentMemberAliases(user: DepartmentMemberUser): string[] {
+  const identifiers = [user._id.toString()];
+
+  if (user.gitlabId !== undefined && user.gitlabId !== null) {
+    identifiers.push(user.gitlabId.toString());
+  }
+
+  return identifiers;
+}
+
+function isEligibleDepartmentMember(user: DepartmentMemberUser | null | undefined): user is DepartmentMemberUser {
+  if (!user || user.isActive === false) {
+    return false;
+  }
+
+  if (user.userType) {
+    return user.userType === 'human';
+  }
+
+  return user.userSource === 'manual';
+}
+
+async function findUserByDepartmentMemberIdentifier(memberIdentifier: string) {
+  const trimmedIdentifier = memberIdentifier.trim();
+
+  if (!trimmedIdentifier) {
+    return null;
+  }
+
+  if (mongoose.Types.ObjectId.isValid(trimmedIdentifier)) {
+    const userById = await User.findById(trimmedIdentifier);
+
+    if (userById) {
+      return userById;
+    }
+  }
+
+  if (/^\d+$/.test(trimmedIdentifier)) {
+    return User.findOne({ gitlabId: Number(trimmedIdentifier) });
+  }
+
+  return null;
+}
 
 export const departmentModule = createModule({
   id: 'department',
@@ -109,21 +178,52 @@ export const departmentModule = createModule({
         if (!parent.members || parent.members.length === 0) {
           return [];
         }
-        
-        // Convert string IDs to numbers for gitlabId query
-        const gitlabIds = parent.members.map((id: string) => parseInt(id)).filter((id: number) => !isNaN(id));
-        
-        if (gitlabIds.length === 0) {
+
+        const memberIdentifiers: string[] = parent.members;
+        const gitlabIds = memberIdentifiers
+          .filter((id: string) => /^\d+$/.test(id))
+          .map((id: string) => Number(id));
+        const objectIds = memberIdentifiers
+          .filter((id: string) => mongoose.Types.ObjectId.isValid(id))
+          .map((id: string) => new mongoose.Types.ObjectId(id));
+
+        if (gitlabIds.length === 0 && objectIds.length === 0) {
           return [];
         }
-        
-        const users = await User.find({ 
-          gitlabId: { $in: gitlabIds },
-          userType: 'human',
-          isActive: true 
+
+        const identifierFilter: Array<Record<string, unknown>> = [];
+
+        if (gitlabIds.length > 0) {
+          identifierFilter.push({ gitlabId: { $in: gitlabIds } });
+        }
+
+        if (objectIds.length > 0) {
+          identifierFilter.push({ _id: { $in: objectIds } });
+        }
+
+        const users = await User.find({
+          $and: [
+            ACTIVE_HUMAN_DEPARTMENT_MEMBER_FILTER,
+            { $or: identifierFilter },
+          ],
         }).lean();
-        
-        return users;
+
+        const memberOrder = new Map(
+          memberIdentifiers.map((identifier: string, index: number) => [identifier, index])
+        );
+
+        return users
+          .filter(isEligibleDepartmentMember)
+          .sort((left, right) => {
+            const leftIndex = buildDepartmentMemberAliases(left)
+              .map((identifier) => memberOrder.get(identifier))
+              .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+            const rightIndex = buildDepartmentMemberAliases(right)
+              .map((identifier) => memberOrder.get(identifier))
+              .find((index): index is number => index !== undefined) ?? Number.MAX_SAFE_INTEGER;
+
+            return leftIndex - rightIndex;
+          });
       },
       
       // Resolve projects as Project objects
@@ -273,27 +373,42 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
-        // Find user by gitlabId (userId is gitlabId as string)
-        const user = await User.findOne({ gitlabId: parseInt(userId) });
+        const user = await findUserByDepartmentMemberIdentifier(userId);
         
         if (!user) {
-          throw new AppError(`User with GitLab ID ${userId} not found`, 404);
+          throw new AppError(`User with identifier ${userId} not found`, 404);
         }
 
-        // Validate user is human
-        if (user.userType !== 'human') {
-          throw new AppError(`Cannot add non-human account (${user.userType}) to department`, 400);
+        const memberType = user.userType || user.userSource || 'unknown';
+
+        if (!isEligibleDepartmentMember(user)) {
+          throw new AppError(`Cannot add non-human account (${memberType}) to department`, 400);
         }
 
-        // Add to department members array
-        await department.addMember(userId);
+        const memberIdentifier = buildDepartmentMemberIdentifier(user);
+        const memberAliases = new Set(buildDepartmentMemberAliases(user));
+        const alreadyMember = department.members.some((memberId: string) => memberAliases.has(memberId));
+
+        if (!alreadyMember) {
+          await department.addMember(memberIdentifier);
+        }
         
         // SYNC: Update user's department field
         user.department = department.name;
+
+        if (!user.userType && user.userSource === 'manual') {
+          user.userType = 'human';
+        }
+
         await user.save();
         
         const updated = await Department.findById(departmentId).lean();
-        logger.info('Member added to department and user.department synced', { departmentId, userId, departmentName: department.name });
+        logger.info('Member added to department and user.department synced', {
+          departmentId,
+          userId,
+          storedMemberIdentifier: memberIdentifier,
+          departmentName: department.name,
+        });
         return updated!;
       },
 
@@ -306,15 +421,31 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
-        // Remove from department members array
-        await department.removeMember(userId);
+        const user = await findUserByDepartmentMemberIdentifier(userId);
+        const identifiersToRemove = new Set([userId]);
+
+        if (user) {
+          buildDepartmentMemberAliases(user).forEach((identifier) => identifiersToRemove.add(identifier));
+        }
+
+        department.members = department.members.filter(
+          (memberId: string) => !identifiersToRemove.has(memberId)
+        );
+        await department.save();
         
         // SYNC: Update user's department field to empty or default
-        const user = await User.findOne({ gitlabId: parseInt(userId) });
         if (user) {
           user.department = 'General'; // Move to General department instead of leaving empty
+
+          if (!user.userType && user.userSource === 'manual') {
+            user.userType = 'human';
+          }
+
           await user.save();
-          logger.info('User moved to General department', { userId });
+          logger.info('User moved to General department', {
+            userId,
+            removedIdentifiers: Array.from(identifiersToRemove),
+          });
         }
         
         const updated = await Department.findById(departmentId).lean();
@@ -366,14 +497,13 @@ export const departmentModule = createModule({
         // Find all HUMAN users in this department
         const deptUsers = await User.find({ 
           department: department.name, 
-          userType: 'human',
-          isActive: true 
+          ...ACTIVE_HUMAN_DEPARTMENT_MEMBER_FILTER,
         });
 
-        // Rebuild member array using gitlabId as string
+        // Rebuild member array using GitLab IDs when available, otherwise MongoDB IDs for manual users
         const memberIds = deptUsers
-          .filter(user => user.gitlabId)
-          .map(user => user.gitlabId!.toString());
+          .filter(isEligibleDepartmentMember)
+          .map((user) => buildDepartmentMemberIdentifier(user));
 
         department.members = memberIds;
         await department.save();
@@ -397,14 +527,13 @@ export const departmentModule = createModule({
           // Find all HUMAN users in this department
           const deptUsers = await User.find({ 
             department: dept.name, 
-            userType: 'human',
-            isActive: true 
+            ...ACTIVE_HUMAN_DEPARTMENT_MEMBER_FILTER,
           });
 
           // Rebuild member array
           const memberIds = deptUsers
-            .filter(user => user.gitlabId)
-            .map(user => user.gitlabId!.toString());
+            .filter(isEligibleDepartmentMember)
+            .map((user) => buildDepartmentMemberIdentifier(user));
 
           dept.members = memberIds;
           await dept.save();
