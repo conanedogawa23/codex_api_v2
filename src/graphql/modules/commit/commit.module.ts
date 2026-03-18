@@ -4,8 +4,9 @@ import { Project } from '../../../models/Project';
 import { Namespace } from '../../../models/Namespace';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
-import { getAccessibleProjectIds } from '../../../utils/rbac';
+import { getContextAccessibleProjectIds, requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -70,8 +71,6 @@ export const commitModule = createModule({
         status: ProjectStatus
         priority: ProjectPriority
         recentOnly: Boolean = false
-        userId: ID
-        userRole: String
       ): ProjectsWithCommitActivityResult!
     }
   `,
@@ -81,7 +80,8 @@ export const commitModule = createModule({
     },
     
     Query: {
-      commit: async (_: any, { sha }: { sha: string }) => {
+      commit: async (_: any, { sha }: { sha: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching commit by SHA', { sha });
         
         const commit = await Commit.findOne({ sha, isDeleted: false }).lean();
@@ -89,33 +89,68 @@ export const commitModule = createModule({
         if (!commit) {
           throw new AppError(`Commit with SHA ${sha} not found`, 404);
         }
+
+        await requireProjectAccess(context, commit.projectId, 'gitlab');
         
         return commit;
       },
 
-      commits: async (_: any, { projectId, limit, offset }: { projectId: string; limit: number; offset: number }) => {
+      commits: async (
+        _: any,
+        { projectId, limit, offset }: { projectId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching commits', { projectId, limit, offset });
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await Commit.find({ projectId, isDeleted: false })
+        return await Commit.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ authoredDate: -1 })
           .lean();
       },
 
-      commitsByProject: async (_: any, { projectId, limit }: { projectId: string; limit: number }) => {
+      commitsByProject: async (
+        _: any,
+        { projectId, limit }: { projectId: string; limit: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching commits by project', { projectId, limit });
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await Commit.find({ projectId, isDeleted: false })
+        return await Commit.find(filter)
           .limit(limit)
           .sort({ authoredDate: -1 })
           .lean();
       },
 
-      commitsByAuthor: async (_: any, { authorEmail, limit, offset }: { authorEmail: string; limit: number; offset: number }) => {
+      commitsByAuthor: async (
+        _: any,
+        { authorEmail, limit, offset }: { authorEmail: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching commits by author', { authorEmail, limit, offset });
+        const filter = await withProjectFilter(
+          context,
+          { authorEmail, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await Commit.find({ authorEmail, isDeleted: false })
+        return await Commit.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ authoredDate: -1 })
@@ -134,8 +169,6 @@ export const commitModule = createModule({
           status,
           priority,
           recentOnly = false,
-          userId,
-          userRole,
         }: {
           username: string;
           days: number;
@@ -146,10 +179,10 @@ export const commitModule = createModule({
           status?: string;
           priority?: string;
           recentOnly?: boolean;
-          userId?: string;
-          userRole?: string;
-        }
+        },
+        context: GraphQLContext
       ) => {
+        const currentUser = requireCurrentUser(context);
         logger.info('Fetching projects with commit activity', {
           username,
           days,
@@ -160,8 +193,9 @@ export const commitModule = createModule({
           status,
           priority,
           recentOnly,
-          userId,
-          userRole,
+          userId: currentUser.userId,
+          userRole: currentUser.role,
+          isSuperAdmin: currentUser.isSuperAdmin,
         });
         
         try {
@@ -175,20 +209,19 @@ export const commitModule = createModule({
           
           // Apply RBAC: determine which projects the caller can access
           const projectFilter: any = { isActive: true };
+          const accessibleProjects = await getContextAccessibleProjectIds(context);
 
-          if (userId && userRole) {
-            const { isAdminUser, projectIds } = await getAccessibleProjectIds(userId, userRole);
-
-            if (!isAdminUser) {
-              if (projectIds.length === 0) {
-                logger.info('Non-admin user has no accessible projects', { userId });
-                return {
-                  projects: [],
-                  totalCount: 0,
-                };
-              }
-              projectFilter._id = { $in: projectIds };
+          if (!accessibleProjects.isSuperAdmin) {
+            if (accessibleProjects.projectIds.length === 0) {
+              logger.info('User has no accessible projects for commit activity', {
+                userId: currentUser.userId,
+              });
+              return {
+                projects: [],
+                totalCount: 0,
+              };
             }
+            projectFilter._id = { $in: accessibleProjects.projectIds };
           }
 
           // Run commit aggregation and project fetch in parallel

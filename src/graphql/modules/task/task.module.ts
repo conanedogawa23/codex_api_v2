@@ -3,8 +3,9 @@ import mongoose from 'mongoose';
 import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
-import { getAccessibleProjectIds } from '../../../utils/rbac';
+import { getContextAccessibleProjectIds, requireProjectAccess } from '../../../utils/rbac';
 
 /**
  * Build an array of projectId values (both String and ObjectId) for $in queries.
@@ -19,6 +20,29 @@ const buildProjectIdInValues = (projectIds: string[]): any[] => {
     }
   }
   return values;
+};
+
+const appendAndFilter = (query: Record<string, any>, condition: Record<string, any>): void => {
+  query.$and = query.$and || [];
+  query.$and.push(condition);
+};
+
+const getTaskProjectAccess = async (context: GraphQLContext) => {
+  const accessibleProjects = await getContextAccessibleProjectIds(context);
+
+  if (accessibleProjects.isSuperAdmin) {
+    return {
+      projectIds: [] as string[],
+      projectFilter: null as Record<string, any> | null,
+    };
+  }
+
+  return {
+    projectIds: accessibleProjects.projectIds,
+    projectFilter: {
+      projectId: { $in: buildProjectIdInValues(accessibleProjects.projectIds) },
+    },
+  };
 };
 
 export const taskModule = createModule({
@@ -233,11 +257,11 @@ export const taskModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Task!]!
-      tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): TaskFilterResult!
-      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20, offset: Int = 0, userId: ID, userRole: String): TasksByProjectResult!
-      tasksBySprint(sprintId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
-      backlogTasks(projectId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
-      backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100, userId: ID, userRole: String): [Task!]!
+      tasksByFilter(filter: TaskFilterInput!, limit: Int = 20, offset: Int = 0): TaskFilterResult!
+      tasksByProject(projectId: ID!, status: TaskStatus, limit: Int = 20, offset: Int = 0): TasksByProjectResult!
+      tasksBySprint(sprintId: ID!, limit: Int = 100): [Task!]!
+      backlogTasks(projectId: ID!, limit: Int = 100): [Task!]!
+      backlogTasksBySprintRepo(projectId: ID!, sprintRepoId: ID!, limit: Int = 100): [Task!]!
     }
 
     extend type Mutation {
@@ -348,36 +372,50 @@ export const taskModule = createModule({
     },
     
     Query: {
-      task: async (_: any, { id }: { id: string }) => {
+      task: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const task = await Task.findById(id).lean();
         if (!task) {
           throw new AppError('Task not found', 404);
         }
+
+        await requireProjectAccess(context, task.projectId);
         return task;
       },
 
-      taskDetails: async (_: any, { taskId }: { taskId: string }) => {
+      taskDetails: async (_: any, { taskId }: { taskId: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const task = await Task.findById(taskId).lean();
         if (!task) {
           throw new AppError('Task not found', 404);
         }
+        await requireProjectAccess(context, task.projectId);
         logger.info(`Fetched task details for task ${taskId}`);
         return task;
       },
 
       tasks: async (
         _: any,
-        { projectId, status, priority, assignedTo, limit = 20, offset = 0 }: any
+        { projectId, status, priority, assignedTo, limit = 20, offset = 0 }: any,
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         // Use raw collection to handle mixed ObjectId/String types in projectId and assignedTo.id
         const db = mongoose.connection.db;
         const tasksCollection = db.collection('tasks');
         const filter: any = { isActive: true };
+        const taskAccess = await getTaskProjectAccess(context);
+
+        if (taskAccess.projectFilter) {
+          if (taskAccess.projectIds.length === 0) {
+            return [];
+          }
+          appendAndFilter(filter, taskAccess.projectFilter);
+        }
 
         // projectId is stored as both ObjectId and String in DB
         if (projectId) {
-          filter.$and = filter.$and || [];
-          filter.$and.push({
+          appendAndFilter(filter, {
             $or: [
               { projectId: projectId },
               ...(mongoose.Types.ObjectId.isValid(projectId)
@@ -391,8 +429,7 @@ export const taskModule = createModule({
         if (priority) filter.priority = priority.toLowerCase();
         // assignedTo.id is stored as both ObjectId and String in DB
         if (assignedTo) {
-          filter.$and = filter.$and || [];
-          filter.$and.push({
+          appendAndFilter(filter, {
             $or: [
               { 'assignedTo.id': assignedTo },
               ...(mongoose.Types.ObjectId.isValid(assignedTo)
@@ -413,21 +450,11 @@ export const taskModule = createModule({
 
       tasksByProject: async (
         _: any,
-        { projectId, status, limit = 20, offset = 0, userId, userRole }: { projectId: string; status?: string; limit: number; offset: number; userId?: string; userRole?: string }
+        { projectId, status, limit = 20, offset = 0 }: { projectId: string; status?: string; limit: number; offset: number },
+        context: GraphQLContext
       ) => {
-        // Apply RBAC: verify user can access this project
-        if (userId && userRole) {
-          const rbacResult = await getAccessibleProjectIds(userId, userRole);
-          if (!rbacResult.isAdminUser) {
-            if (!rbacResult.projectIds.includes(projectId)) {
-              logger.info('Non-admin user denied access to project tasks', { userId, userRole, projectId });
-              return {
-                tasks: [],
-                totalCount: 0,
-              };
-            }
-          }
-        }
+        requireCurrentUser(context);
+        await requireProjectAccess(context, projectId);
 
         // Use raw collection to handle mixed ObjectId/String projectId
         const db = mongoose.connection.db;
@@ -462,8 +489,10 @@ export const taskModule = createModule({
 
       tasksByFilter: async (
         _: any,
-        { filter, limit = 20, offset = 0, userId, userRole }: { filter: any; limit: number; offset: number; userId?: string; userRole?: string }
+        { filter, limit = 20, offset = 0 }: { filter: any; limit: number; offset: number },
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         // Use raw collection to handle mixed ObjectId/String types
         const db = mongoose.connection.db;
         const tasksCollection = db.collection('tasks');
@@ -472,25 +501,21 @@ export const taskModule = createModule({
         // Apply RBAC: restrict to accessible projects for non-admin users
         const emptyResult = { tasks: [], totalCount: 0, statusSummary: { total: 0, completed: 0, inProgress: 0, pending: 0 } };
         let rbacProjectFilter: any = null;
-        if (userId && userRole) {
-          const rbacResult = await getAccessibleProjectIds(userId, userRole);
-          if (!rbacResult.isAdminUser) {
-            if (rbacResult.projectIds.length === 0) {
-              logger.info('Non-admin user has no accessible projects for tasks', { userId, userRole });
-              return emptyResult;
-            }
-            const accessibleValues = buildProjectIdInValues(rbacResult.projectIds);
-            rbacProjectFilter = { projectId: { $in: accessibleValues } };
-            query.$and = query.$and || [];
-            query.$and.push(rbacProjectFilter);
-            logger.info('Applying RBAC filter to tasksByFilter', { userId, userRole, accessibleProjects: rbacResult.projectIds.length });
+        const taskAccess = await getTaskProjectAccess(context);
+        if (taskAccess.projectFilter) {
+          if (taskAccess.projectIds.length === 0) {
+            return emptyResult;
           }
+          rbacProjectFilter = taskAccess.projectFilter;
+          appendAndFilter(query, rbacProjectFilter);
+          logger.info('Applying RBAC filter to tasksByFilter', {
+            accessibleProjects: taskAccess.projectIds.length,
+          });
         }
 
         // Handle mixed ObjectId/String projectId
         if (filter.projectId) {
-          query.$and = query.$and || [];
-          query.$and.push({
+          appendAndFilter(query, {
             $or: [
               { projectId: filter.projectId },
               ...(mongoose.Types.ObjectId.isValid(filter.projectId)
@@ -509,8 +534,7 @@ export const taskModule = createModule({
         if (filter.priority) query.priority = filter.priority.toLowerCase();
         // Handle mixed ObjectId/String assignedTo.id
         if (filter.assignedTo) {
-          query.$and = query.$and || [];
-          query.$and.push({
+          appendAndFilter(query, {
             $or: [
               { 'assignedTo.id': filter.assignedTo },
               ...(mongoose.Types.ObjectId.isValid(filter.assignedTo)
@@ -551,14 +575,12 @@ export const taskModule = createModule({
 
         // Apply RBAC filter to baseQuery as well
         if (rbacProjectFilter) {
-          baseQuery.$and = baseQuery.$and || [];
-          baseQuery.$and.push(rbacProjectFilter);
+          appendAndFilter(baseQuery, rbacProjectFilter);
         }
 
         // Apply non-status filters for status summary (project, assignee, etc.)
         if (filter.projectId) {
-          baseQuery.$and = baseQuery.$and || [];
-          baseQuery.$and.push({
+          appendAndFilter(baseQuery, {
             $or: [
               { projectId: filter.projectId },
               ...(mongoose.Types.ObjectId.isValid(filter.projectId)
@@ -568,8 +590,7 @@ export const taskModule = createModule({
           });
         }
         if (filter.assignedTo) {
-          baseQuery.$and = baseQuery.$and || [];
-          baseQuery.$and.push({
+          appendAndFilter(baseQuery, {
             $or: [
               { 'assignedTo.id': filter.assignedTo },
               ...(mongoose.Types.ObjectId.isValid(filter.assignedTo)
@@ -622,20 +643,20 @@ export const taskModule = createModule({
         };
       },
 
-      tasksBySprint: async (_: any, { sprintId, limit = 100, userId, userRole }: { sprintId: string; limit: number; userId?: string; userRole?: string }) => {
+      tasksBySprint: async (
+        _: any,
+        { sprintId, limit = 100 }: { sprintId: string; limit: number },
+        context: GraphQLContext
+      ) => {
         try {
-          // Apply RBAC: restrict to accessible projects for non-admin users
+          requireCurrentUser(context);
+          const taskAccess = await getTaskProjectAccess(context);
           let rbacFilter: any = {};
-          if (userId && userRole) {
-            const rbacResult = await getAccessibleProjectIds(userId, userRole);
-            if (!rbacResult.isAdminUser) {
-              if (rbacResult.projectIds.length === 0) {
-                logger.info('Non-admin user has no accessible projects for sprint tasks', { userId, userRole });
-                return [];
-              }
-              const accessibleValues = buildProjectIdInValues(rbacResult.projectIds);
-              rbacFilter = { projectId: { $in: accessibleValues } };
+          if (taskAccess.projectFilter) {
+            if (taskAccess.projectIds.length === 0) {
+              return [];
             }
+            rbacFilter = taskAccess.projectFilter;
           }
 
           // Handle both ObjectId and string types for sprintId
@@ -660,18 +681,14 @@ export const taskModule = createModule({
         }
       },
 
-      backlogTasks: async (_: any, { projectId, limit = 100, userId, userRole }: { projectId: string; limit: number; userId?: string; userRole?: string }) => {
+      backlogTasks: async (
+        _: any,
+        { projectId, limit = 100 }: { projectId: string; limit: number },
+        context: GraphQLContext
+      ) => {
         try {
-          // Apply RBAC: verify user can access this project
-          if (userId && userRole) {
-            const rbacResult = await getAccessibleProjectIds(userId, userRole);
-            if (!rbacResult.isAdminUser) {
-              if (!rbacResult.projectIds.includes(projectId)) {
-                logger.info('Non-admin user denied access to backlog tasks', { userId, userRole, projectId });
-                return [];
-              }
-            }
-          }
+          requireCurrentUser(context);
+          await requireProjectAccess(context, projectId);
 
           return await Task.find({
             projectId,
@@ -692,9 +709,11 @@ export const taskModule = createModule({
 
       backlogTasksBySprintRepo: async (
         _: any,
-        { projectId, sprintRepoId, limit = 100, userId, userRole }: { projectId: string; sprintRepoId: string; limit: number; userId?: string; userRole?: string }
+        { projectId, sprintRepoId, limit = 100 }: { projectId: string; sprintRepoId: string; limit: number },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
             throw new AppError('Invalid project ID', 400);
           }
@@ -702,16 +721,7 @@ export const taskModule = createModule({
             throw new AppError('Invalid sprintRepo ID', 400);
           }
 
-          // Apply RBAC: verify user can access this project
-          if (userId && userRole) {
-            const rbacResult = await getAccessibleProjectIds(userId, userRole);
-            if (!rbacResult.isAdminUser) {
-              if (!rbacResult.projectIds.includes(projectId)) {
-                logger.info('Non-admin user denied access to sprint repo backlog tasks', { userId, userRole, projectId });
-                return [];
-              }
-            }
-          }
+          await requireProjectAccess(context, projectId);
 
           return await Task.find({
             projectId,

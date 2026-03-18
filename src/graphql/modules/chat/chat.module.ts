@@ -149,13 +149,25 @@ export const chatModule = createModule({
 
         setTimeout(() => {
           void agentService.executeSession(session!.id, currentUser).catch((error) => {
+            const message =
+              error instanceof Error ? error.message : 'I ran into an unexpected error while processing your request.';
+
             logger.error('Background chat execution failed', {
-              error: error instanceof Error ? error.message : 'Unknown error',
+              error: message,
               sessionId: session!.id,
               userId: currentUser.userId,
             });
+
+            void chatPubSub.publish(getChatStreamTopic(session!.id), {
+              chatStream: {
+                sessionId: session!.id,
+                content: `I ran into an error while processing your request: ${message}`,
+                done: true,
+                toolCallInProgress: null,
+              },
+            });
           });
-        }, 200);
+        }, 1000);
 
         return toChatSession(session);
       },

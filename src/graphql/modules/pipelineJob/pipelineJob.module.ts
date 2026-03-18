@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { PipelineJob } from '../../../models/PipelineJob';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const pipelineJobModule = createModule({
   id: 'pipelineJob',
@@ -61,7 +63,8 @@ export const pipelineJobModule = createModule({
     },
     
     Query: {
-      pipelineJob: async (_: any, { id }: { id: string }) => {
+      pipelineJob: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching pipeline job by ID', { id });
         
         const job = await PipelineJob.findById(id).lean();
@@ -69,11 +72,14 @@ export const pipelineJobModule = createModule({
         if (!job) {
           throw new AppError(`Pipeline job with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, job.projectId, 'gitlab');
         
         return job;
       },
 
-      pipelineJobByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      pipelineJobByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching pipeline job by GitLab ID', { gitlabId });
         
         const job = await PipelineJob.findOne({ gitlabId, isDeleted: false }).lean();
@@ -84,43 +90,89 @@ export const pipelineJobModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, job.projectId, 'gitlab');
         
         return job;
       },
 
-      pipelineJobs: async (_: any, { pipelineId, limit, offset }: { pipelineId: string; limit: number; offset: number }) => {
+      pipelineJobs: async (
+        _: any,
+        { pipelineId, limit, offset }: { pipelineId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching pipeline jobs', { pipelineId, limit, offset });
+        const filter = await withProjectFilter(
+          context,
+          { pipelineId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await PipelineJob.find({ pipelineId, isDeleted: false })
+        return await PipelineJob.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      pipelineJobsByStage: async (_: any, { pipelineId, stage, limit }: { pipelineId: string; stage: string; limit: number }) => {
+      pipelineJobsByStage: async (
+        _: any,
+        { pipelineId, stage, limit }: { pipelineId: string; stage: string; limit: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching pipeline jobs by stage', { pipelineId, stage, limit });
+        const filter = await withProjectFilter(
+          context,
+          { pipelineId, stage, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await PipelineJob.find({ pipelineId, stage, isDeleted: false })
+        return await PipelineJob.find(filter)
           .limit(limit)
           .sort({ createdAt: 1 })
           .lean();
       },
 
-      pipelineJobsByStatus: async (_: any, { projectId, status, limit, offset }: { projectId: string; status: string; limit: number; offset: number }) => {
+      pipelineJobsByStatus: async (
+        _: any,
+        { projectId, status, limit, offset }: { projectId: string; status: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching pipeline jobs by status', { projectId, status, limit, offset });
+        const filter = await withProjectFilter(
+          context,
+          { projectId, status, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await PipelineJob.find({ projectId, status, isDeleted: false })
+        return await PipelineJob.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      failedPipelineJobs: async (_: any, { projectId, limit }: { projectId: string; limit: number }) => {
+      failedPipelineJobs: async (
+        _: any,
+        { projectId, limit }: { projectId: string; limit: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching failed pipeline jobs', { projectId, limit });
+        const filter = await withProjectFilter(
+          context,
+          { projectId, status: 'failed', isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
         
-        return await PipelineJob.find({ projectId, status: 'failed', isDeleted: false })
+        return await PipelineJob.find(filter)
           .limit(limit)
           .sort({ createdAt: -1 })
           .lean();

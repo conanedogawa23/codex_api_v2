@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Note } from '../../../models/Note';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 import mongoose from 'mongoose';
 
 export const noteModule = createModule({
@@ -56,7 +58,8 @@ export const noteModule = createModule({
     },
     
     Query: {
-      note: async (_: any, { id }: { id: string }) => {
+      note: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching note by ID', { id });
         
         const note = await Note.findById(id).lean();
@@ -64,11 +67,14 @@ export const noteModule = createModule({
         if (!note) {
           throw new AppError(`Note with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, note.projectId, 'gitlab');
         
         return note;
       },
 
-      noteByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      noteByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching note by GitLab ID', { gitlabId });
         
         const note = await Note.findOne({ gitlabId, isDeleted: false }).lean();
@@ -79,43 +85,81 @@ export const noteModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, note.projectId, 'gitlab');
         
         return note;
       },
 
-      notes: async (_: any, { noteableId, noteableType, limit, offset }: any) => {
+      notes: async (
+        _: any,
+        { noteableId, noteableType, limit, offset }: any,
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching notes', { noteableId, noteableType, limit, offset });
-        
-        return await Note.find({
+
+        const filter = await withProjectFilter(
+          context,
+          {
           noteableId,
           noteableType,
           isDeleted: false
-        })
+          },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Note.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      notesByAuthor: async (_: any, { authorId, limit, offset }: { authorId: string; limit: number; offset: number }) => {
+      notesByAuthor: async (
+        _: any,
+        { authorId, limit, offset }: { authorId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching notes by author', { authorId, limit, offset });
-        
-        return await Note.find({ authorId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { authorId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Note.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      unresolvedNotes: async (_: any, { projectId, limit }: { projectId: string; limit: number }) => {
+      unresolvedNotes: async (
+        _: any,
+        { projectId, limit }: { projectId: string; limit: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching unresolved notes', { projectId, limit });
-        
-        return await Note.find({
+
+        const filter = await withProjectFilter(
+          context,
+          {
           projectId,
           resolvable: true,
           resolved: false,
           isDeleted: false
-        })
+          },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Note.find(filter)
           .limit(limit)
           .sort({ createdAt: -1 })
           .lean();

@@ -1,7 +1,10 @@
 import { createModule, gql } from 'graphql-modules';
 import { Event } from '../../../models/Event';
+import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const eventModule = createModule({
   id: 'event',
@@ -11,6 +14,7 @@ export const eventModule = createModule({
       gitlabId: Int!
       projectId: String
       authorId: ID
+      authorUsername: String
       actionName: String!
       targetType: String
       targetId: Int
@@ -44,10 +48,19 @@ export const eventModule = createModule({
   resolvers: {
     Event: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      authorUsername: async (parent: any) => {
+        if (!parent.authorId) {
+          return null;
+        }
+
+        const user = await User.findById(parent.authorId).select('username name').lean();
+        return user?.username || user?.name || null;
+      },
     },
     
     Query: {
-      event: async (_: any, { id }: { id: string }) => {
+      event: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching event by ID', { id });
         
         const event = await Event.findById(id).lean();
@@ -55,11 +68,14 @@ export const eventModule = createModule({
         if (!event) {
           throw new AppError(`Event with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, event.projectId, 'gitlab');
         
         return event;
       },
 
-      eventByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      eventByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching event by GitLab ID', { gitlabId });
         
         const event = await Event.findOne({ gitlabId, isDeleted: false }).lean();
@@ -70,16 +86,46 @@ export const eventModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, event.projectId, 'gitlab');
         
         return event;
       },
 
-      events: async (_: any, { projectId, limit, offset }: { projectId?: string; limit: number; offset: number }) => {
+      events: async (
+        _: any,
+        { projectId, limit, offset }: { projectId?: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching events', { projectId, limit, offset });
         
         const filter: any = { isDeleted: false };
         if (projectId) filter.projectId = projectId;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
         
+        return await Event.find(scopedFilter)
+          .limit(limit)
+          .skip(offset)
+          .sort({ createdAt: -1 })
+          .lean();
+      },
+
+      eventsByUser: async (
+        _: any,
+        { userId, limit, offset }: { userId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
+        logger.info('Fetching events by user', { userId, limit, offset });
+
+        const filter = await withProjectFilter(
+          context,
+          { authorId: userId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
         return await Event.find(filter)
           .limit(limit)
           .skip(offset)
@@ -87,29 +133,39 @@ export const eventModule = createModule({
           .lean();
       },
 
-      eventsByUser: async (_: any, { userId, limit, offset }: { userId: string; limit: number; offset: number }) => {
-        logger.info('Fetching events by user', { userId, limit, offset });
-        
-        return await Event.find({ authorId: userId, isDeleted: false })
-          .limit(limit)
-          .skip(offset)
-          .sort({ createdAt: -1 })
-          .lean();
-      },
-
-      recentEvents: async (_: any, { limit }: { limit: number }) => {
+      recentEvents: async (_: any, { limit }: { limit: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching recent events', { limit });
-        
-        return await Event.find({ isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Event.find(filter)
           .limit(limit)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      eventsByAction: async (_: any, { actionName, limit, offset }: { actionName: string; limit: number; offset: number }) => {
+      eventsByAction: async (
+        _: any,
+        { actionName, limit, offset }: { actionName: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching events by action', { actionName, limit, offset });
-        
-        return await Event.find({ actionName, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { actionName, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Event.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })

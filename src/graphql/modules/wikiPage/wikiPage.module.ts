@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { WikiPage } from '../../../models/WikiPage';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const wikiPageModule = createModule({
   id: 'wikiPage',
@@ -42,7 +44,8 @@ export const wikiPageModule = createModule({
     },
     
     Query: {
-      wikiPage: async (_: any, { id }: { id: string }) => {
+      wikiPage: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching wiki page by ID', { id });
         
         const page = await WikiPage.findById(id).lean();
@@ -50,11 +53,18 @@ export const wikiPageModule = createModule({
         if (!page) {
           throw new AppError(`Wiki page with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, page.projectId, 'gitlab');
         
         return page;
       },
 
-      wikiPageBySlug: async (_: any, { projectId, slug }: { projectId: string; slug: string }) => {
+      wikiPageBySlug: async (
+        _: any,
+        { projectId, slug }: { projectId: string; slug: string },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching wiki page by slug', { projectId, slug });
         
         const page = await WikiPage.findOne({ projectId, slug, isDeleted: false }).lean();
@@ -62,14 +72,28 @@ export const wikiPageModule = createModule({
         if (!page) {
           throw new AppError(`Wiki page with slug ${slug} not found in project ${projectId}`, 404);
         }
+
+        await requireProjectAccess(context, page.projectId, 'gitlab');
         
         return page;
       },
 
-      wikiPages: async (_: any, { projectId, limit, offset }: { projectId: string; limit: number; offset: number }) => {
+      wikiPages: async (
+        _: any,
+        { projectId, limit, offset }: { projectId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching wiki pages', { projectId, limit, offset });
-        
-        return await WikiPage.find({ projectId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await WikiPage.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ title: 1 })

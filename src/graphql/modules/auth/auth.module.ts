@@ -2,6 +2,7 @@ import { createModule, gql } from 'graphql-modules';
 import * as jwt from 'jsonwebtoken';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 import { environment } from '../../../config/environment';
 import { emailService } from '../../../utils/emailService';
@@ -16,6 +17,20 @@ interface TokenPayload {
   email: string;
   username: string;
   gitlabId?: number;
+}
+
+function toAuthUser(user: any) {
+  return {
+    userId: user._id?.toString() || user.userId,
+    email: user.email,
+    username: user.username,
+    name: user.name,
+    gitlabId: user.gitlabId,
+    avatar: user.avatar,
+    department: user.department,
+    role: user.role,
+    isSuperAdmin: user.isSuperAdmin === true,
+  };
 }
 
 export const authModule = createModule({
@@ -35,6 +50,7 @@ export const authModule = createModule({
       avatar: String
       department: String!
       role: String!
+      isSuperAdmin: Boolean!
     }
 
     input LoginInput {
@@ -58,6 +74,7 @@ export const authModule = createModule({
 
     extend type Query {
       verifyToken: AuthUser
+      me(forceSync: Boolean): AuthUser
     }
 
     extend type Mutation {
@@ -68,22 +85,14 @@ export const authModule = createModule({
   `,
   resolvers: {
     Query: {
-      verifyToken: async (_: any, __: any, context: any) => {
-        const authHeader = context.req?.headers?.authorization;
-
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-          // Return null instead of throwing error to allow admin mode
-          logger.info('verifyToken called without authentication - returning null (admin mode)');
+      verifyToken: async (_: any, __: any, context: GraphQLContext) => {
+        if (!context.currentUser) {
+          logger.info('verifyToken called without authentication - returning null');
           return null;
         }
 
-        const token = authHeader.substring(7);
-
         try {
-          const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
-
-          // Fetch fresh user data from database
-          const user = await User.findById(decoded.userId).lean();
+          const user = await User.findById(context.currentUser.userId).lean();
 
           if (!user) {
             throw new AppError('User not found', 404);
@@ -95,16 +104,7 @@ export const authModule = createModule({
 
           logger.info('Token verified successfully', { userId: user._id.toString() });
 
-          return {
-            userId: user._id.toString(),
-            email: user.email,
-            username: user.username,
-            name: user.name,
-            gitlabId: user.gitlabId,
-            avatar: user.avatar,
-            department: user.department,
-            role: user.role,
-          };
+          return toAuthUser(user);
         } catch (error: any) {
           if (error.name === 'JsonWebTokenError') {
             throw new AppError('Invalid token', 401);
@@ -114,6 +114,20 @@ export const authModule = createModule({
           }
           throw error;
         }
+      },
+      me: async (_: any, __: any, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
+        const user = await User.findById(currentUser.userId).lean();
+
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        if (!user.isActive) {
+          throw new AppError('User account is inactive', 403);
+        }
+
+        return toAuthUser(user);
       },
     },
 
@@ -158,16 +172,7 @@ export const authModule = createModule({
 
         return {
           token,
-          user: {
-            userId: user._id.toString(),
-            email: user.email,
-            username: user.username,
-            name: user.name,
-            gitlabId: user.gitlabId,
-            avatar: user.avatar,
-            department: user.department,
-            role: user.role,
-          },
+          user: toAuthUser(user),
         };
       },
 
@@ -305,16 +310,7 @@ export const authModule = createModule({
 
         return {
           token,
-          user: {
-            userId: user._id.toString(),
-            email: user.email,
-            username: user.username,
-            name: user.name,
-            gitlabId: user.gitlabId,
-            avatar: user.avatar,
-            department: user.department,
-            role: user.role,
-          },
+          user: toAuthUser(user),
         };
       },
     },

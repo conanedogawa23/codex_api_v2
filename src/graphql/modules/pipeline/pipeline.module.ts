@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Pipeline } from '../../../models/Pipeline';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const pipelineModule = createModule({
   id: 'pipeline',
@@ -67,15 +69,19 @@ export const pipelineModule = createModule({
     },
     
     Query: {
-      pipeline: async (_: any, { id }: { id: string }) => {
+      pipeline: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const pipeline = await Pipeline.findById(id).lean();
         if (!pipeline) {
           throw new AppError('Pipeline not found', 404);
         }
+
+        await requireProjectAccess(context, pipeline.projectId, 'gitlab');
         return pipeline;
       },
 
-      pipelineByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      pipelineByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const pipeline = await Pipeline.findOne({ gitlabId }).lean();
         if (!pipeline) {
           throw new AppError(
@@ -83,19 +89,24 @@ export const pipelineModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, pipeline.projectId, 'gitlab');
         return pipeline;
       },
 
       pipelines: async (
         _: any,
-        { projectId, status, ref, limit = 20, offset = 0 }: any
+        { projectId, status, ref, limit = 20, offset = 0 }: any,
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
         if (status) filter.status = status;
         if (ref) filter.ref = ref;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
-        return await Pipeline.find(filter)
+        return await Pipeline.find(scopedFilter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
@@ -104,18 +115,21 @@ export const pipelineModule = createModule({
 
       pipelinesByProject: async (
         _: any,
-        { projectId, status, limit = 20, offset = 0 }: { projectId: string; status?: string; limit: number; offset: number }
+        { projectId, status, limit = 20, offset = 0 }: { projectId: string; status?: string; limit: number; offset: number },
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = { projectId };
         if (status) filter.status = status;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
         const [pipelines, totalCount] = await Promise.all([
-          Pipeline.find(filter)
+          Pipeline.find(scopedFilter)
             .limit(limit)
             .skip(offset)
             .sort({ createdAt: -1 })
             .lean(),
-          Pipeline.countDocuments(filter),
+          Pipeline.countDocuments(scopedFilter),
         ]);
 
         return {

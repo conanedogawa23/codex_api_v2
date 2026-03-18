@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Attachment } from '../../../models/Attachment';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const attachmentModule = createModule({
   id: 'attachment',
@@ -35,7 +37,8 @@ export const attachmentModule = createModule({
     },
     
     Query: {
-      attachment: async (_: any, { id }: { id: string }) => {
+      attachment: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching attachment by ID', { id });
         
         const attachment = await Attachment.findById(id).lean();
@@ -43,11 +46,14 @@ export const attachmentModule = createModule({
         if (!attachment) {
           throw new AppError(`Attachment with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, attachment.projectId, 'gitlab');
         
         return attachment;
       },
 
-      attachmentByUrl: async (_: any, { url }: { url: string }) => {
+      attachmentByUrl: async (_: any, { url }: { url: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching attachment by URL', { url });
         
         const attachment = await Attachment.findOne({ url, isDeleted: false }).lean();
@@ -55,24 +61,50 @@ export const attachmentModule = createModule({
         if (!attachment) {
           throw new AppError(`Attachment with URL ${url} not found`, 404);
         }
+
+        await requireProjectAccess(context, attachment.projectId, 'gitlab');
         
         return attachment;
       },
 
-      attachments: async (_: any, { projectId, limit, offset }: { projectId: string; limit: number; offset: number }) => {
+      attachments: async (
+        _: any,
+        { projectId, limit, offset }: { projectId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching attachments', { projectId, limit, offset });
-        
-        return await Attachment.find({ projectId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Attachment.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      attachmentsByUploader: async (_: any, { uploaderId, limit, offset }: { uploaderId: string; limit: number; offset: number }) => {
+      attachmentsByUploader: async (
+        _: any,
+        { uploaderId, limit, offset }: { uploaderId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching attachments by uploader', { uploaderId, limit, offset });
-        
-        return await Attachment.find({ uploadedBy: uploaderId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { uploadedBy: uploaderId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Attachment.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })

@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { DraftNote } from '../../../models/DraftNote';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const draftNoteModule = createModule({
   id: 'draftNote',
@@ -35,7 +37,8 @@ export const draftNoteModule = createModule({
     },
     
     Query: {
-      draftNote: async (_: any, { id }: { id: string }) => {
+      draftNote: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching draft note by ID', { id });
         
         const draftNote = await DraftNote.findById(id).lean();
@@ -43,11 +46,14 @@ export const draftNoteModule = createModule({
         if (!draftNote) {
           throw new AppError(`Draft note with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, draftNote.projectId, 'gitlab');
         
         return draftNote;
       },
 
-      draftNoteByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      draftNoteByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching draft note by GitLab ID', { gitlabId });
         
         const draftNote = await DraftNote.findOne({ gitlabId, isDeleted: false }).lean();
@@ -58,24 +64,50 @@ export const draftNoteModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, draftNote.projectId, 'gitlab');
         
         return draftNote;
       },
 
-      draftNotes: async (_: any, { mergeRequestId, limit, offset }: { mergeRequestId: string; limit: number; offset: number }) => {
+      draftNotes: async (
+        _: any,
+        { mergeRequestId, limit, offset }: { mergeRequestId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching draft notes', { mergeRequestId, limit, offset });
-        
-        return await DraftNote.find({ mergeRequestId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { mergeRequestId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await DraftNote.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      draftNotesByAuthor: async (_: any, { authorId, limit, offset }: { authorId: string; limit: number; offset: number }) => {
+      draftNotesByAuthor: async (
+        _: any,
+        { authorId, limit, offset }: { authorId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching draft notes by author', { authorId, limit, offset });
-        
-        return await DraftNote.find({ authorId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { authorId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await DraftNote.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })

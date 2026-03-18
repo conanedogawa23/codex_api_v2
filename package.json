@@ -10,6 +10,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint src/**/*.ts",
     "clean": "rm -rf dist",
+    "seed:super-admins": "ts-node scripts/seed-super-admins.ts",
     "rover:check": "rover graph check --schema ./src/graphql/schema.graphql",
     "rover:publish": "rover graph publish --schema ./src/graphql/schema.graphql",
     "pm2:start": "pm2 start ecosystem.config.js --env production",

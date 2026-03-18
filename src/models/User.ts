@@ -91,6 +91,7 @@ export interface IUser extends Document {
   commitsCount?: number;
 
   // Security & Access Control
+  isSuperAdmin: boolean;
   twoFactorEnabled?: boolean;
   lockedAt?: Date;
   unlockAt?: Date;
@@ -333,6 +334,11 @@ const UserSchema: Schema = new Schema({
   commitsCount: { type: Number, min: 0 },
 
   // Security & Access Control
+  isSuperAdmin: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   twoFactorEnabled: Boolean,
   lockedAt: Date,
   unlockAt: Date,
@@ -420,6 +426,7 @@ UserSchema.index({ userSource: 1, email: 1 });
 UserSchema.index({ userSource: 1, status: 1 });
 UserSchema.index({ canSyncFromGitlab: 1 });
 UserSchema.index({ department: 1, userType: 1 });
+UserSchema.index({ isSuperAdmin: 1 });
 
 // Virtual for full name
 UserSchema.virtual('fullName').get(function() {

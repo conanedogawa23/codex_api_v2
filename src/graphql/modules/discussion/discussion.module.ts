@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Discussion } from '../../../models/Discussion';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const discussionModule = createModule({
   id: 'discussion',
@@ -38,7 +40,8 @@ export const discussionModule = createModule({
     },
     
     Query: {
-      discussion: async (_: any, { id }: { id: string }) => {
+      discussion: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching discussion by ID', { id });
         
         const discussion = await Discussion.findById(id).lean();
@@ -46,11 +49,14 @@ export const discussionModule = createModule({
         if (!discussion) {
           throw new AppError(`Discussion with ID ${id} not found`, 404);
         }
+
+        await requireProjectAccess(context, discussion.projectId, 'gitlab');
         
         return discussion;
       },
 
-      discussionByGitlabId: async (_: any, { gitlabId }: { gitlabId: string }) => {
+      discussionByGitlabId: async (_: any, { gitlabId }: { gitlabId: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching discussion by GitLab ID', { gitlabId });
         
         const discussion = await Discussion.findOne({ gitlabId, isDeleted: false }).lean();
@@ -61,28 +67,54 @@ export const discussionModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, discussion.projectId, 'gitlab');
         
         return discussion;
       },
 
-      discussions: async (_: any, { noteableId, noteableType, limit, offset }: any) => {
+      discussions: async (
+        _: any,
+        { noteableId, noteableType, limit, offset }: any,
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching discussions', { noteableId, noteableType, limit, offset });
-        
-        return await Discussion.find({
+
+        const filter = await withProjectFilter(
+          context,
+          {
           noteableId,
           noteableType,
           isDeleted: false
-        })
+          },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Discussion.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })
           .lean();
       },
 
-      discussionsByProject: async (_: any, { projectId, limit, offset }: { projectId: string; limit: number; offset: number }) => {
+      discussionsByProject: async (
+        _: any,
+        { projectId, limit, offset }: { projectId: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching discussions by project', { projectId, limit, offset });
-        
-        return await Discussion.find({ projectId, isDeleted: false })
+
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Discussion.find(filter)
           .limit(limit)
           .skip(offset)
           .sort({ createdAt: -1 })

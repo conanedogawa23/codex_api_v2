@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Milestone } from '../../../models/Milestone';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -68,15 +70,19 @@ export const milestoneModule = createModule({
     },
     
     Query: {
-      milestone: async (_: any, { id }: { id: string }) => {
+      milestone: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const milestone = await Milestone.findById(id).lean();
         if (!milestone) {
           throw new AppError('Milestone not found', 404);
         }
+
+        await requireProjectAccess(context, milestone.projectId, 'gitlab');
         return milestone;
       },
 
-      milestoneByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      milestoneByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const milestone = await Milestone.findOne({ gitlabId }).lean();
         if (!milestone) {
           throw new AppError(
@@ -84,13 +90,17 @@ export const milestoneModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, milestone.projectId, 'gitlab');
         return milestone;
       },
 
       milestones: async (
         _: any,
-        { projectId, state, limit = 20, offset = 0, search }: any
+        { projectId, state, limit = 20, offset = 0, search }: any,
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
         if (state) filter.state = state;
@@ -101,14 +111,15 @@ export const milestoneModule = createModule({
             { description: { $regex: escapedSearch, $options: 'i' } },
           ];
         }
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
         const [milestones, totalCount] = await Promise.all([
-          Milestone.find(filter)
+          Milestone.find(scopedFilter)
             .limit(limit)
             .skip(offset)
             .sort({ dueDate: 1 })
             .lean(),
-          Milestone.countDocuments(filter),
+          Milestone.countDocuments(scopedFilter),
         ]);
 
         return {
@@ -119,12 +130,15 @@ export const milestoneModule = createModule({
 
       milestonesByProject: async (
         _: any,
-        { projectId, state, limit = 20 }: { projectId: string; state?: string; limit: number }
+        { projectId, state, limit = 20 }: { projectId: string; state?: string; limit: number },
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = { projectId };
         if (state) filter.state = state;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
-        return await Milestone.find(filter)
+        return await Milestone.find(scopedFilter)
           .limit(limit)
           .sort({ dueDate: 1 })
           .lean();

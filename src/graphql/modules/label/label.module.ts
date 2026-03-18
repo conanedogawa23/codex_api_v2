@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { Label } from '../../../models/Label';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const labelModule = createModule({
   id: 'label',
@@ -58,38 +60,63 @@ export const labelModule = createModule({
     },
     
     Query: {
-      label: async (_: any, { id }: { id: string }) => {
+      label: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const label = await Label.findById(id).lean();
         if (!label) {
           throw new AppError('Label not found', 404);
         }
+
+        await requireProjectAccess(context, label.projectId, 'gitlab');
         return label;
       },
 
-      labelByName: async (_: any, { projectId, name }: { projectId: number; name: string }) => {
+      labelByName: async (
+        _: any,
+        { projectId, name }: { projectId: number; name: string },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         const label = await Label.findOne({ projectId, name }).lean();
         if (!label) {
           throw new AppError('Label not found', 404);
         }
+
+        await requireProjectAccess(context, label.projectId, 'gitlab');
         return label;
       },
 
       labels: async (
         _: any,
-        { projectId, limit = 20, offset = 0 }: any
+        { projectId, limit = 20, offset = 0 }: any,
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
-        return await Label.find(filter)
+        return await Label.find(scopedFilter)
           .limit(limit)
           .skip(offset)
           .sort({ name: 1 })
           .lean();
       },
 
-      labelsByProject: async (_: any, { projectId }: { projectId: number }) => {
-        return await Label.find({ projectId, isActive: true }).sort({ name: 1 }).lean();
+      labelsByProject: async (
+        _: any,
+        { projectId }: { projectId: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isActive: true },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Label.find(filter).sort({ name: 1 }).lean();
       },
     },
 

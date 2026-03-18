@@ -1,7 +1,9 @@
 import { createModule, gql } from 'graphql-modules';
 import { MergeRequest } from '../../../models/MergeRequest';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 
 export const mergeRequestModule = createModule({
   id: 'mergeRequest',
@@ -98,15 +100,19 @@ export const mergeRequestModule = createModule({
     },
     
     Query: {
-      mergeRequest: async (_: any, { id }: { id: string }) => {
+      mergeRequest: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const mr = await MergeRequest.findById(id).lean();
         if (!mr) {
           throw new AppError('Merge request not found', 404);
         }
+
+        await requireProjectAccess(context, mr.projectId, 'gitlab');
         return mr;
       },
 
-      mergeRequestByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      mergeRequestByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const mr = await MergeRequest.findByGitlabId(gitlabId);
         if (!mr) {
           throw new AppError(
@@ -114,21 +120,26 @@ export const mergeRequestModule = createModule({
             404
           );
         }
+
+        await requireProjectAccess(context, mr.projectId, 'gitlab');
         return mr;
       },
 
       mergeRequests: async (
         _: any,
-        { projectId, state, sourceBranch, targetBranch, authorId, limit = 20, offset = 0 }: any
+        { projectId, state, sourceBranch, targetBranch, authorId, limit = 20, offset = 0 }: any,
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = {};
         if (projectId) filter.projectId = projectId;
         if (state) filter.state = state;
         if (sourceBranch) filter.sourceBranch = sourceBranch;
         if (targetBranch) filter.targetBranch = targetBranch;
         if (authorId) filter['author.id'] = authorId;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
-        return await MergeRequest.find(filter)
+        return await MergeRequest.find(scopedFilter)
           .limit(limit)
           .skip(offset)
           .sort({ updatedAt: -1 })
@@ -137,12 +148,15 @@ export const mergeRequestModule = createModule({
 
       mergeRequestsByProject: async (
         _: any,
-        { projectId, state, limit = 20 }: { projectId: number; state?: string; limit: number }
+        { projectId, state, limit = 20 }: { projectId: number; state?: string; limit: number },
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         const filter: any = { projectId };
         if (state) filter.state = state;
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
-        return await MergeRequest.find(filter)
+        return await MergeRequest.find(scopedFilter)
           .limit(limit)
           .sort({ updatedAt: -1 })
           .lean();
@@ -150,8 +164,10 @@ export const mergeRequestModule = createModule({
 
       gitlabMergeRequests: async (
         _: any,
-        { projectId, state, limit = 20, offset = 0, search }: { projectId: string; state?: string; limit: number; offset: number; search?: string }
+        { projectId, state, limit = 20, offset = 0, search }: { projectId: string; state?: string; limit: number; offset: number; search?: string },
+        context: GraphQLContext
       ) => {
+        requireCurrentUser(context);
         // Convert projectId string to number for MongoDB query
         const projectIdNum = parseInt(projectId, 10);
         const filter: any = { projectId: projectIdNum };
@@ -167,14 +183,15 @@ export const mergeRequestModule = createModule({
             { targetBranch: searchRegex },
           ];
         }
+        const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
 
         const [mergeRequests, totalCount] = await Promise.all([
-          MergeRequest.find(filter)
+          MergeRequest.find(scopedFilter)
             .limit(limit)
             .skip(offset)
             .sort({ updatedAt: -1 })
             .lean(),
-          MergeRequest.countDocuments(filter),
+          MergeRequest.countDocuments(scopedFilter),
         ]);
 
         return {

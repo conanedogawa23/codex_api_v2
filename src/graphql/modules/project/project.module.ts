@@ -5,9 +5,10 @@ import { Namespace } from '../../../models/Namespace';
 import { Task } from '../../../models/Task';
 import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 import { gitlabApi } from '../../../utils/gitlabApi';
-import { getAccessibleProjectIds, extractGitlabIdFromGid } from '../../../utils/rbac';
+import { extractGitlabIdFromGid, requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
 import mongoose from 'mongoose';
 
 type DepartmentProjectReference = {
@@ -201,11 +202,9 @@ export const projectModule = createModule({
         category: String
         limit: Int = 20
         offset: Int = 0
-        userId: ID
-        userRole: String
       ): [Project!]!
-      projectsByNamespace(namespacePath: String!, limit: Int = 20, userId: ID, userRole: String): [Project!]!
-      projectsByDepartment(department: String!, userId: ID, userRole: String): [Project!]!
+      projectsByNamespace(namespacePath: String!, limit: Int = 20): [Project!]!
+      projectsByDepartment(department: String!): [Project!]!
     }
 
     extend type Mutation {
@@ -409,27 +408,36 @@ export const projectModule = createModule({
     },
     
     Query: {
-      project: async (_: any, { id }: { id: string }) => {
+      project: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const project = await Project.findById(id).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }
+
+        await requireProjectAccess(context, project._id?.toString() || id);
         return project;
       },
 
-      projectDetails: async (_: any, { projectId }: { projectId: string }) => {
+      projectDetails: async (_: any, { projectId }: { projectId: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const project = await Project.findById(projectId).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }
+
+        await requireProjectAccess(context, project._id?.toString() || projectId);
         return project;
       },
 
-      projectByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      projectByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const project = await Project.findByGitlabId(gitlabId);
         if (!project) {
           throw new AppError('Project not found', 404);
         }
+
+        await requireProjectAccess(context, project.gitlabId, 'gitlab');
         return project;
       },
 
@@ -445,9 +453,11 @@ export const projectModule = createModule({
             search?: string;
             status?: string;
           };
-        }
+        },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const query: any = {};
 
           if (filter) {
@@ -473,15 +483,16 @@ export const projectModule = createModule({
 
           const limit = filter?.limit || 100;
           const offset = filter?.offset || 0;
+          const scopedQuery = await withProjectFilter(context, query, '_id');
 
           const [projects, totalCount] = await Promise.all([
-            Project.find(query)
+            Project.find(scopedQuery)
               .select('gitlabId name nameWithNamespace description defaultBranch visibility webUrl httpUrlToRepo sshUrlToRepo pathWithNamespace namespace status progress priority category department deadline tasks budget assignedTo createdAt updatedAt lastActivityAt lastSynced isActive')
               .limit(limit)
               .skip(offset)
               .sort({ lastActivityAt: -1 })
               .lean(),
-            Project.countDocuments(query),
+            Project.countDocuments(scopedQuery),
           ]);
 
           return {
@@ -499,14 +510,17 @@ export const projectModule = createModule({
 
       projects: async (
         _: any,
-        { status, priority, department, category, limit = 20, offset = 0, userId, userRole }: any
+        { status, priority, department, category, limit = 20, offset = 0 }: any,
+        context: GraphQLContext
       ) => {
         const startTime = Date.now();
+        const currentUser = requireCurrentUser(context);
         const filter: any = { isActive: true };
         
         logger.info('Projects query received', { 
-          userId, 
-          userRole, 
+          userId: currentUser.userId,
+          userRole: currentUser.role,
+          isSuperAdmin: currentUser.isSuperAdmin,
           status, 
           department, 
           category,
@@ -514,39 +528,16 @@ export const projectModule = createModule({
           offset,
         });
         
-        // Apply role-based filtering using user.projects[] -> gitlabIds
-        if (userId && userRole) {
-          const rbacStart = Date.now();
-          const result = await getAccessibleProjectIds(userId, userRole);
-          logger.info('RBAC check completed', { durationMs: Date.now() - rbacStart });
-          
-          if (!result.isAdminUser) {
-            if (result.projectIds.length === 0) {
-              logger.info('Non-admin user has no accessible projects', { userId, userRole });
-              return [];
-            }
-            filter._id = { $in: result.projectIds };
-            logger.info('Applying user-based project filter', { 
-              userId, 
-              userRole, 
-              accessibleCount: result.projectIds.length 
-            });
-          } else {
-            logger.info('Admin user detected - no project filtering applied', { userId, userRole });
-          }
-        } else {
-          logger.warn('Missing userId or userRole - returning all projects', { userId, userRole });
-        }
-        
         // Convert GraphQL enums to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (priority) filter.priority = priority.toLowerCase();
         if (department) filter.department = department;
         if (category) filter.category = category;
+        const scopedFilter = await withProjectFilter(context, filter, '_id');
 
         // Select only fields needed by the GraphQL schema to reduce payload
         const dbStart = Date.now();
-        const projects = await Project.find(filter)
+        const projects = await Project.find(scopedFilter)
           .select('gitlabId name nameWithNamespace description defaultBranch visibility webUrl httpUrlToRepo sshUrlToRepo pathWithNamespace namespace status progress priority category department deadline tasks budget assignedTo createdAt updatedAt lastActivityAt lastSynced isActive')
           .limit(limit)
           .skip(offset)
@@ -566,12 +557,17 @@ export const projectModule = createModule({
 
       projectsByNamespace: async (
         _: any,
-        { namespacePath, limit = 20 }: { namespacePath: string; limit: number }
+        { namespacePath, limit = 20 }: { namespacePath: string; limit: number },
+        context: GraphQLContext
       ) => {
-        return await Project.find({
+        requireCurrentUser(context);
+
+        const filter = await withProjectFilter(context, {
           'namespace.path': namespacePath,
           isActive: true,
-        })
+        }, '_id');
+
+        return await Project.find(filter)
           .limit(limit)
           .sort({ lastActivityAt: -1 })
           .lean();
@@ -579,12 +575,19 @@ export const projectModule = createModule({
 
       projectsByDepartment: async (
         _: any,
-        { department, userId, userRole }: { department: string; userId?: string; userRole?: string }
+        { department }: { department: string },
+        context: GraphQLContext
       ) => {
-        logger.info('Fetching projects by department', { department, userId, userRole });
+        const currentUser = requireCurrentUser(context);
+        logger.info('Fetching projects by department', {
+          department,
+          userId: currentUser.userId,
+          userRole: currentUser.role,
+          isSuperAdmin: currentUser.isSuperAdmin,
+        });
         
         // Get the department document
-        const dept = await Department.findOne({ name: department });
+        const dept = await Department.findOne({ name: department }).lean();
         
         if (!dept || !dept.projects || dept.projects.length === 0) {
           logger.info('No projects found for department', { department });
@@ -619,21 +622,10 @@ export const projectModule = createModule({
             { $or: identifierFilter },
           ],
         };
+
+        const scopedFilter = await withProjectFilter(context, filter, '_id');
         
-        // Apply role-based filtering using user.projects[] -> gitlabIds
-        if (userId && userRole) {
-          const result = await getAccessibleProjectIds(userId, userRole);
-          if (!result.isAdminUser) {
-            if (result.projectIds.length === 0) {
-              logger.info('Non-admin user has no accessible projects for department query', { userId });
-              return [];
-            }
-            filter.$and.push({ _id: { $in: result.projectIds } });
-            logger.info('Applying user-based filter for department query', { userId, userRole, department });
-          }
-        }
-        
-        const projects = await Project.find(filter)
+        const projects = await Project.find(scopedFilter)
           .sort({ lastActivityAt: -1 })
           .lean();
 

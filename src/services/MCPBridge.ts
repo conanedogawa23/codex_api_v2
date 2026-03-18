@@ -60,13 +60,25 @@ export class MCPBridge {
   public async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     await this.ensureConnected();
 
-    const result = (await this.client!.callTool({
-      name,
-      arguments: args,
-    })) as {
+    let result: {
       content: Array<{ type: string; text?: string }>;
       structuredContent?: unknown;
     };
+
+    try {
+      result = (await this.client!.callTool({
+        name,
+        arguments: args,
+      })) as typeof result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn('MCP tool call failed, returning error to model', {
+        tool: name,
+        args,
+        error: errorMessage,
+      });
+      return `[Tool Error] ${name} failed: ${errorMessage}. Try a different approach — use get_repository_tree to list directory contents, or verify the file path exists before reading it.`;
+    }
 
     const textContent = result.content
       .filter((item: { type: string }) => item.type === 'text')
