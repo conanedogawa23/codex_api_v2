@@ -1,44 +1,10 @@
 /**
  * GitLab Event GraphQL Queries
- * Events are project-level and use project context
+ * GitLab's GraphQL schema in this deployment does not expose the
+ * cross-project event feeds needed by the sync pipeline.
+ *
+ * Event sync now uses the REST project events endpoint via `gitlabApi.ts`.
  */
 
-export const GITLAB_EVENT_QUERIES = {
-  CORE_DATA: `
-    query GetEventCoreData($projectPath: ID!) {
-      project(fullPath: $projectPath) {
-        events {
-          nodes {
-            id
-            action
-            createdAt
-            author {
-              id
-              username
-              name
-            }
-          }
-        }
-      }
-    }
-  `,
-
-  SIMPLE_LIST: `
-    query GetSimpleEventList($first: Int!, $after: String, $projectPath: ID!) {
-      project(fullPath: $projectPath) {
-        events(first: $first, after: $after) {
-          nodes {
-            id
-            action
-            createdAt
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  `
-};
+export const GITLAB_EVENT_QUERIES = Object.freeze({});
 

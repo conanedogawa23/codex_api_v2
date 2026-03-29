@@ -4,7 +4,15 @@ import { createModule, gql } from 'graphql-modules';
 import { User } from '../../../models/User';
 import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import {
+  ACCESS_ROLE,
+  canManageDepartmentUsers,
+  getPermissionsForAccessRole,
+  normalizeAccessRole,
+} from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
+import { isDepartmentInScope, requireDepartmentScope } from '../../../utils/rbac';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_SANITIZE_REGEX = /[^a-z0-9._-]/g;
@@ -42,6 +50,49 @@ async function generateUniqueUsername(baseUsername: string): Promise<string> {
   throw new AppError('Unable to generate a unique username. Please try again.', 500);
 }
 
+function assertPrivilegedAccessRoleWriteAllowed(
+  currentUser: ReturnType<typeof requireCurrentUser>,
+  accessRole?: string | null
+) {
+  if (currentUser.isSuperAdmin || !accessRole) {
+    return;
+  }
+
+  const normalizedAccessRole = normalizeAccessRole(accessRole);
+  if (
+    normalizedAccessRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN ||
+    normalizedAccessRole === ACCESS_ROLE.FINANCE
+  ) {
+    throw new AppError('Only platform super admins can assign this access role', 403);
+  }
+}
+
+function requireDepartmentUserAdmin(
+  context: GraphQLContext,
+  department: string | undefined | null
+) {
+  const currentUser = requireCurrentUser(context);
+
+  if (!canManageDepartmentUsers(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  requireDepartmentScope(context, department);
+  return currentUser;
+}
+
+function requireUserVisibility(context: GraphQLContext, user: any) {
+  const currentUser = requireCurrentUser(context);
+  const targetUserId = user._id?.toString() || user.id;
+
+  if (currentUser.isSuperAdmin || currentUser.userId === targetUserId) {
+    return currentUser;
+  }
+
+  requireDepartmentScope(context, user.department);
+  return currentUser;
+}
+
 export const userModule = createModule({
   id: 'user',
   typeDefs: gql`
@@ -52,6 +103,8 @@ export const userModule = createModule({
       email: String!
       username: String!
       role: String!
+      accessRole: AccessRole!
+      permissions: [Permission!]!
       department: String!
       departmentDetails: Department
       userType: String!
@@ -83,6 +136,8 @@ export const userModule = createModule({
       email: String!
       username: String!
       role: String!
+      accessRole: AccessRole!
+      permissions: [Permission!]!
       department: String!
       departmentDetails: Department
       userType: String!
@@ -225,6 +280,7 @@ export const userModule = createModule({
 
     input UpdateUserInput {
       role: String
+      accessRole: AccessRole
       department: String
       status: UserStatus
       skills: [String!]
@@ -234,6 +290,7 @@ export const userModule = createModule({
       name: String!
       email: String!
       role: String!
+      accessRole: AccessRole
       department: String!
       status: UserStatus
       skills: [String!]
@@ -244,6 +301,7 @@ export const userModule = createModule({
       status: UserStatus
       department: String
       role: String
+      accessRole: AccessRole
       isActive: Boolean
       search: String
       limit: Int
@@ -277,6 +335,9 @@ export const userModule = createModule({
   resolvers: {
     User: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      accessRole: (parent: any) => normalizeAccessRole(parent.accessRole),
+      permissions: (parent: any) =>
+        getPermissionsForAccessRole(parent.accessRole, parent.isSuperAdmin === true),
       status: (parent: any) => {
         // Convert DB format (lowercase with hyphen) to GraphQL format (uppercase with underscore)
         // DB: 'on-leave' -> GraphQL: 'ON_LEAVE'
@@ -309,6 +370,9 @@ export const userModule = createModule({
     
     OrganizationUser: {
       id: (parent: any) => parent._id?.toString() || parent.id,
+      accessRole: (parent: any) => normalizeAccessRole(parent.accessRole),
+      permissions: (parent: any) =>
+        getPermissionsForAccessRole(parent.accessRole, parent.isSuperAdmin === true),
       status: (parent: any) => {
         return parent.status?.replace(/-/g, '_').toUpperCase();
       },
@@ -338,29 +402,41 @@ export const userModule = createModule({
     },
     
     Query: {
-      user: async (_: any, { id }: { id: string }) => {
+      user: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const user = await User.findById(id).lean();
         if (!user) {
           throw new AppError('User not found', 404);
         }
+        requireUserVisibility(context, user);
         return user;
       },
-      users: async (_: any, { status, department, limit = 20, offset = 0 }: any) => {
+      users: async (_: any, { status, department, limit = 20, offset = 0 }: any, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
         const filter: any = {};
         // Convert GraphQL enum to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
-        if (department) filter.department = department;
+        if (department) {
+          filter.department = currentUser.isSuperAdmin
+            ? department
+            : requireDepartmentScope(context, department);
+        } else if (!currentUser.isSuperAdmin) {
+          filter.department = requireDepartmentScope(context, currentUser.department);
+        }
         return await User.find(filter).limit(limit).skip(offset).sort({ createdAt: -1 }).lean();
       },
-      userByEmail: async (_: any, { email }: { email: string }) => {
+      userByEmail: async (_: any, { email }: { email: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const user = await User.findByEmail(email);
         if (!user) {
           throw new AppError('User not found', 404);
         }
+        requireUserVisibility(context, user);
         return user;
       },
-      organizationUsers: async (_: any, { filter }: { filter?: any }) => {
+      organizationUsers: async (_: any, { filter }: { filter?: any }, context: GraphQLContext) => {
         try {
+          const currentUser = requireCurrentUser(context);
           const query: any = {};
 
           // Apply filters if provided
@@ -370,10 +446,15 @@ export const userModule = createModule({
               query.status = filter.status.toLowerCase().replace(/_/g, '-');
             }
             if (filter.department !== undefined) {
-              query.department = filter.department;
+              query.department = currentUser.isSuperAdmin
+                ? filter.department
+                : requireDepartmentScope(context, filter.department);
             }
             if (filter.role !== undefined) {
               query.role = filter.role;
+            }
+            if (filter.accessRole !== undefined) {
+              query.accessRole = normalizeAccessRole(filter.accessRole);
             }
             if (filter.isActive !== undefined) {
               query.isActive = filter.isActive;
@@ -389,6 +470,10 @@ export const userModule = createModule({
           } else {
             // Default: only active users if no filter provided
             query.isActive = true;
+          }
+
+          if (!currentUser.isSuperAdmin) {
+            query.department = query.department || requireDepartmentScope(context, currentUser.department);
           }
 
           const limit = filter?.limit || 100;
@@ -414,14 +499,20 @@ export const userModule = createModule({
           throw new AppError('Failed to fetch organization users', 500);
         }
       },
-      userByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      userByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const user = await User.findByGitlabId(gitlabId);
         if (!user) {
           throw new AppError('User not found', 404);
         }
+        requireUserVisibility(context, user);
         return user;
       },
-      userSettings: async (_: any, { userId }: { userId: string }) => {
+      userSettings: async (_: any, { userId }: { userId: string }, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
+        if (!currentUser.isSuperAdmin && currentUser.userId !== userId) {
+          throw new AppError('Forbidden', 403);
+        }
         const user = await User.findById(userId).select('settings').lean();
         if (!user) {
           throw new AppError('User not found', 404);
@@ -473,10 +564,12 @@ export const userModule = createModule({
       },
     },
     Mutation: {
-      createUser: async (_: any, { input }: any) => {
+      createUser: async (_: any, { input }: any, context: GraphQLContext) => {
+        const currentUser = requireDepartmentUserAdmin(context, input.department);
         const name = input.name?.trim();
         const email = input.email?.trim().toLowerCase();
         const role = input.role?.trim();
+        const accessRole = normalizeAccessRole(input.accessRole);
         const department = input.department?.trim();
 
         if (!name || !email || !role || !department) {
@@ -486,6 +579,8 @@ export const userModule = createModule({
         if (!EMAIL_REGEX.test(email)) {
           throw new AppError('Please enter a valid email address', 400);
         }
+
+        assertPrivilegedAccessRoleWriteAllowed(currentUser, accessRole);
 
         const existingEmailUser = await User.findOne({ email }).select('_id').lean();
         if (existingEmailUser) {
@@ -504,6 +599,7 @@ export const userModule = createModule({
           name,
           projects: [],
           role,
+          accessRole,
           skills: input.skills || [],
           status: normalizeUserStatus(input.status),
           userSource: 'manual',
@@ -540,34 +636,80 @@ export const userModule = createModule({
           throw error;
         }
       },
-      updateUser: async (_: any, { id, input }: any) => {
+      updateUser: async (_: any, { id, input }: any, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
+
         // Convert GraphQL enum to DB format
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = normalizeUserStatus(dbInput.status);
-        
+        if (dbInput.accessRole) dbInput.accessRole = normalizeAccessRole(dbInput.accessRole);
+
+        const existingUser = await User.findById(id);
+        if (!existingUser) {
+          throw new AppError('User not found', 404);
+        }
+
+        if (!currentUser.isSuperAdmin) {
+          requireDepartmentUserAdmin(context, existingUser.department);
+
+          if (!isDepartmentInScope(currentUser, existingUser.department) || existingUser.isSuperAdmin) {
+            throw new AppError('Forbidden', 403);
+          }
+
+          const targetAccessRole = normalizeAccessRole(existingUser.accessRole);
+          if (
+            targetAccessRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN ||
+            targetAccessRole === ACCESS_ROLE.FINANCE
+          ) {
+            throw new AppError('Forbidden', 403);
+          }
+
+          if (dbInput.department) {
+            requireDepartmentScope(context, dbInput.department);
+          }
+
+          assertPrivilegedAccessRoleWriteAllowed(currentUser, dbInput.accessRole);
+        }
+
         const user = await User.findByIdAndUpdate(id, dbInput, { new: true, runValidators: true });
         if (!user) {
           throw new AppError('User not found', 404);
         }
         return user;
       },
-      addUserProject: async (_: any, { id, projectId, projectName, role }: any) => {
+      addUserProject: async (_: any, { id, projectId, projectName, role }: any, context: GraphQLContext) => {
         const user = await User.findById(id);
         if (!user) {
           throw new AppError('User not found', 404);
+        }
+        const currentUser = requireDepartmentUserAdmin(context, user.department);
+        if (!currentUser.isSuperAdmin && user.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
         }
         await user.addProject(projectId, projectName, role);
         return await User.findById(id).lean(); // Return updated user as lean object
       },
-      removeUserProject: async (_: any, { id, projectId }: any) => {
+      removeUserProject: async (_: any, { id, projectId }: any, context: GraphQLContext) => {
         const user = await User.findById(id);
         if (!user) {
           throw new AppError('User not found', 404);
         }
+        const currentUser = requireDepartmentUserAdmin(context, user.department);
+        if (!currentUser.isSuperAdmin && user.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
+        }
         await user.removeProject(projectId);
         return await User.findById(id).lean(); // Return updated user as lean object
       },
-      updateUserSettings: async (_: any, { userId, settings }: { userId: string; settings: any }) => {
+      updateUserSettings: async (
+        _: any,
+        { userId, settings }: { userId: string; settings: any },
+        context: GraphQLContext
+      ) => {
+        const currentUser = requireCurrentUser(context);
+        if (!currentUser.isSuperAdmin && currentUser.userId !== userId) {
+          throw new AppError('Forbidden', 403);
+        }
         const user = await User.findById(userId);
         if (!user) {
           throw new AppError('User not found', 404);
@@ -601,7 +743,15 @@ export const userModule = createModule({
 
         return updatedSettings;
       },
-      dismissNotification: async (_: any, { userId, notificationId }: { userId: string; notificationId: string }) => {
+      dismissNotification: async (
+        _: any,
+        { userId, notificationId }: { userId: string; notificationId: string },
+        context: GraphQLContext
+      ) => {
+        const currentUser = requireCurrentUser(context);
+        if (!currentUser.isSuperAdmin && currentUser.userId !== userId) {
+          throw new AppError('Forbidden', 403);
+        }
         const user = await User.findById(userId);
         if (!user) {
           throw new AppError('User not found', 404);
@@ -622,7 +772,15 @@ export const userModule = createModule({
 
         return user.settings;
       },
-      dismissAllNotifications: async (_: any, { userId, notificationIds }: { userId: string; notificationIds: string[] }) => {
+      dismissAllNotifications: async (
+        _: any,
+        { userId, notificationIds }: { userId: string; notificationIds: string[] },
+        context: GraphQLContext
+      ) => {
+        const currentUser = requireCurrentUser(context);
+        if (!currentUser.isSuperAdmin && currentUser.userId !== userId) {
+          throw new AppError('Forbidden', 403);
+        }
         const user = await User.findById(userId);
         if (!user) {
           throw new AppError('User not found', 404);

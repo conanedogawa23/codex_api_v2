@@ -114,7 +114,8 @@ class NamespaceSyncProcessor extends BaseSyncProcessor<INamespace> {
       gitlabId,
       name: ns.name || '',
       path: ns.path || '',
-      kind: ns.kind || 'user',
+      // This processor reads GitLab groups, so synced namespaces are always groups.
+      kind: 'group',
       fullName: ns.fullName || ns.name || '',
       fullPath: ns.fullPath || ns.path || '',
       parentId: ns.parentId || undefined,

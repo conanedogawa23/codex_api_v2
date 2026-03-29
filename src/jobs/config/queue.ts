@@ -57,124 +57,64 @@ export const issueSyncQueue = new Queue('issue-sync', queueOptions);
 export const mergeRequestSyncQueue = new Queue('merge-request-sync', queueOptions);
 export const namespaceSyncQueue = new Queue('namespace-sync', queueOptions);
 export const pipelineSyncQueue = new Queue('pipeline-sync', queueOptions);
+export const commitSyncQueue = new Queue('commit-sync', queueOptions);
+export const labelSyncQueue = new Queue('label-sync', queueOptions);
+export const milestoneSyncQueue = new Queue('milestone-sync', queueOptions);
+export const iterationSyncQueue = new Queue('iteration-sync', queueOptions);
+export const eventSyncQueue = new Queue('event-sync', queueOptions);
 
-// Queue event listeners for monitoring
-userSyncQueue.on('error', (error: Error) => {
-  logger.error('User sync queue error', { error: error.message });
-});
-
-userSyncQueue.on('waiting', (jobId: string) => {
-  logger.debug('User sync job waiting', { jobId });
-});
-
-userSyncQueue.on('active', (job: Queue.Job) => {
-  logger.info('User sync job started', { jobId: job.id, data: job.data });
-});
-
-userSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('User sync job completed', { 
-    jobId: job.id, 
-    result,
-    duration: Date.now() - job.processedOn!
+function registerQueueListeners(queue: any, label: string): void {
+  queue.on('error', (error: Error) => {
+    logger.error(`${label} sync queue error`, { error: error.message });
   });
-});
 
-userSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('User sync job failed', { 
-    jobId: job.id, 
-    error: error.message,
-    stack: error.stack 
+  queue.on('waiting', (jobId: string) => {
+    logger.debug(`${label} sync job waiting`, { jobId });
   });
-});
 
-userSyncQueue.on('stalled', (job: Queue.Job) => {
-  logger.warn('User sync job stalled', { jobId: job.id });
-});
-
-// Project sync queue event listeners
-projectSyncQueue.on('error', (error: Error) => {
-  logger.error('Project sync queue error', { error: error.message });
-});
-
-projectSyncQueue.on('waiting', (jobId: string) => {
-  logger.debug('Project sync job waiting', { jobId });
-});
-
-projectSyncQueue.on('active', (job: Queue.Job) => {
-  logger.info('Project sync job started', { jobId: job.id, data: job.data });
-});
-
-projectSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('Project sync job completed', { 
-    jobId: job.id, 
-    result,
-    duration: Date.now() - job.processedOn!
+  queue.on('active', (job: Queue.Job) => {
+    logger.info(`${label} sync job started`, { jobId: job.id, data: job.data });
   });
-});
 
-projectSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('Project sync job failed', { 
-    jobId: job.id, 
-    error: error.message,
-    stack: error.stack 
+  queue.on('completed', (job: Queue.Job, result: any) => {
+    const duration =
+      typeof job.processedOn === 'number' ? Date.now() - job.processedOn : undefined;
+
+    logger.info(`${label} sync job completed`, {
+      jobId: job.id,
+      result,
+      duration,
+    });
   });
-});
 
-projectSyncQueue.on('stalled', (job: Queue.Job) => {
-  logger.warn('Project sync job stalled', { jobId: job.id });
-});
+  queue.on('failed', (job: Queue.Job, error: Error) => {
+    logger.error(`${label} sync job failed`, {
+      jobId: job.id,
+      error: error.message,
+      stack: error.stack,
+    });
+  });
 
-// Issue sync queue event listeners
-issueSyncQueue.on('error', (error: Error) => {
-  logger.error('Issue sync queue error', { error: error.message });
-});
+  queue.on('stalled', (job: Queue.Job) => {
+    logger.warn(`${label} sync job stalled`, { jobId: job.id });
+  });
+}
 
-issueSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('Issue sync job completed', { jobId: job.id, result });
-});
-
-issueSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('Issue sync job failed', { jobId: job.id, error: error.message });
-});
-
-// Merge request sync queue event listeners
-mergeRequestSyncQueue.on('error', (error: Error) => {
-  logger.error('Merge request sync queue error', { error: error.message });
-});
-
-mergeRequestSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('Merge request sync job completed', { jobId: job.id, result });
-});
-
-mergeRequestSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('Merge request sync job failed', { jobId: job.id, error: error.message });
-});
-
-// Namespace sync queue event listeners
-namespaceSyncQueue.on('error', (error: Error) => {
-  logger.error('Namespace sync queue error', { error: error.message });
-});
-
-namespaceSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('Namespace sync job completed', { jobId: job.id, result });
-});
-
-namespaceSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('Namespace sync job failed', { jobId: job.id, error: error.message });
-});
-
-// Pipeline sync queue event listeners
-pipelineSyncQueue.on('error', (error: Error) => {
-  logger.error('Pipeline sync queue error', { error: error.message });
-});
-
-pipelineSyncQueue.on('completed', (job: Queue.Job, result: any) => {
-  logger.info('Pipeline sync job completed', { jobId: job.id, result });
-});
-
-pipelineSyncQueue.on('failed', (job: Queue.Job, error: Error) => {
-  logger.error('Pipeline sync job failed', { jobId: job.id, error: error.message });
-});
+for (const [queue, label] of [
+  [userSyncQueue, 'User'],
+  [projectSyncQueue, 'Project'],
+  [issueSyncQueue, 'Issue'],
+  [mergeRequestSyncQueue, 'Merge request'],
+  [namespaceSyncQueue, 'Namespace'],
+  [pipelineSyncQueue, 'Pipeline'],
+  [commitSyncQueue, 'Commit'],
+  [labelSyncQueue, 'Label'],
+  [milestoneSyncQueue, 'Milestone'],
+  [iterationSyncQueue, 'Iteration'],
+  [eventSyncQueue, 'Event'],
+] as Array<[any, string]>) {
+  registerQueueListeners(queue, label);
+}
 
 // Graceful shutdown
 export const closeQueues = async (): Promise<void> => {
@@ -185,6 +125,11 @@ export const closeQueues = async (): Promise<void> => {
   await mergeRequestSyncQueue.close();
   await namespaceSyncQueue.close();
   await pipelineSyncQueue.close();
+  await commitSyncQueue.close();
+  await labelSyncQueue.close();
+  await milestoneSyncQueue.close();
+  await iterationSyncQueue.close();
+  await eventSyncQueue.close();
   await redisClient.quit();
   await subscriber.quit();
   logger.info('Job queues closed successfully');

@@ -6,9 +6,16 @@ import { Task } from '../../../models/Task';
 import { Department } from '../../../models/Department';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canManageDepartmentProjects } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import { gitlabApi } from '../../../utils/gitlabApi';
-import { extractGitlabIdFromGid, requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
+import {
+  extractGitlabIdFromGid,
+  isDepartmentInScope,
+  requireDepartmentScope,
+  requireProjectAccess,
+  withProjectFilter,
+} from '../../../utils/rbac';
 import mongoose from 'mongoose';
 
 type DepartmentProjectReference = {
@@ -27,6 +34,89 @@ function buildDepartmentProjectAliases(project: DepartmentProjectReference): str
   }
 
   return identifiers;
+}
+
+function requireProjectManagement(context: GraphQLContext, department?: string | null) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentProjects(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (department) {
+    requireDepartmentScope(context, department);
+  }
+
+  return currentUser;
+}
+
+async function resolveProjectCreationNamespace(
+  inputNamespaceId: number | null | undefined,
+  departmentName: string | null | undefined,
+  isSuperAdmin: boolean
+): Promise<{ namespaceId: number; source: 'input' | 'department'; namespacePath?: string }> {
+  if (isSuperAdmin && inputNamespaceId) {
+    return {
+      namespaceId: inputNamespaceId,
+      source: 'input',
+    };
+  }
+
+  const normalizedDepartmentName = departmentName?.trim();
+  if (!normalizedDepartmentName) {
+    throw new AppError(
+      'Select a department with a linked GitLab namespace or provide a GitLab namespace ID.',
+      400
+    );
+  }
+
+  const department = await Department.findOne({
+    name: { $regex: `^${escapeRegex(normalizedDepartmentName)}$`, $options: 'i' },
+    isActive: true,
+  })
+    .select('name namespaceId')
+    .lean();
+
+  if (!department) {
+    throw new AppError(`Department "${normalizedDepartmentName}" not found`, 404);
+  }
+
+  if (!department.namespaceId) {
+    throw new AppError(
+      `Department "${department.name}" is not linked to a GitLab namespace. Link the department before creating projects.`,
+      400
+    );
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(department.namespaceId)) {
+    throw new AppError(
+      `Department "${department.name}" is linked to an invalid GitLab namespace mapping. Update the department mapping and try again.`,
+      400
+    );
+  }
+
+  const namespace = await Namespace.findById(department.namespaceId)
+    .select('gitlabId fullPath path name')
+    .lean();
+
+  if (!namespace?.gitlabId) {
+    throw new AppError(
+      `Department "${department.name}" is linked to an invalid GitLab namespace. Update the department mapping and try again.`,
+      400
+    );
+  }
+
+  if (inputNamespaceId && inputNamespaceId !== namespace.gitlabId) {
+    throw new AppError(
+      `Projects for department "${department.name}" must use the linked GitLab namespace "${namespace.fullPath || namespace.path || namespace.name}".`,
+      isSuperAdmin ? 400 : 403
+    );
+  }
+
+  return {
+    namespaceId: namespace.gitlabId,
+    source: 'department',
+    namespacePath: namespace.fullPath || namespace.path || namespace.name,
+  };
 }
 
 export const projectModule = createModule({
@@ -519,7 +609,7 @@ export const projectModule = createModule({
         
         logger.info('Projects query received', { 
           userId: currentUser.userId,
-          userRole: currentUser.role,
+          accessRole: currentUser.accessRole,
           isSuperAdmin: currentUser.isSuperAdmin,
           status, 
           department, 
@@ -531,7 +621,11 @@ export const projectModule = createModule({
         // Convert GraphQL enums to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
         if (priority) filter.priority = priority.toLowerCase();
-        if (department) filter.department = department;
+        if (department) {
+          filter.department = currentUser.isSuperAdmin
+            ? department
+            : requireDepartmentScope(context, department);
+        }
         if (category) filter.category = category;
         const scopedFilter = await withProjectFilter(context, filter, '_id');
 
@@ -582,9 +676,13 @@ export const projectModule = createModule({
         logger.info('Fetching projects by department', {
           department,
           userId: currentUser.userId,
-          userRole: currentUser.role,
+          accessRole: currentUser.accessRole,
           isSuperAdmin: currentUser.isSuperAdmin,
         });
+
+        if (!currentUser.isSuperAdmin) {
+          requireDepartmentScope(context, department);
+        }
         
         // Get the department document
         const dept = await Department.findOne({ name: department }).lean();
@@ -652,16 +750,34 @@ export const projectModule = createModule({
     },
 
     Mutation: {
-      createProject: async (_: any, { input }: any) => {
+      createProject: async (_: any, { input }: any, context: GraphQLContext) => {
         try {
-          logger.info('Creating new project', { name: input.name, namespaceId: input.namespaceId });
+          const currentUser = requireProjectManagement(context, input.department || undefined);
+          const scopedDepartment = currentUser.isSuperAdmin
+            ? input.department
+            : requireDepartmentScope(context, input.department || currentUser.department);
+
+          const resolvedNamespace = await resolveProjectCreationNamespace(
+            input.namespaceId,
+            scopedDepartment,
+            currentUser.isSuperAdmin
+          );
+
+          logger.info('Creating new project', {
+            name: input.name,
+            requestedNamespaceId: input.namespaceId,
+            resolvedNamespaceId: resolvedNamespace.namespaceId,
+            namespaceSource: resolvedNamespace.source,
+            department: scopedDepartment,
+            namespacePath: resolvedNamespace.namespacePath,
+          });
 
           // Step 1: Create project in GitLab
           const gitlabProject = await gitlabApi.createProject({
             name: input.name,
             description: input.description,
             visibility: input.visibility?.toLowerCase() as 'private' | 'internal' | 'public',
-            namespace_id: input.namespaceId,
+            namespace_id: resolvedNamespace.namespaceId,
           });
 
           logger.info('GitLab project created successfully', {
@@ -692,7 +808,7 @@ export const projectModule = createModule({
             status: input.status?.toLowerCase().replace(/_/g, '-') || 'planned',
             priority: input.priority?.toLowerCase() || 'medium',
             category: input.category || 'Uncategorized',
-            department: input.department,
+            department: scopedDepartment,
             deadline: input.deadline,
             progress: 0,
             tasks: {
@@ -731,12 +847,24 @@ export const projectModule = createModule({
         }
       },
 
-      updateProject: async (_: any, { id, input }: any) => {
+      updateProject: async (_: any, { id, input }: any, context: GraphQLContext) => {
+        const existingProject = await Project.findById(id).lean();
+        if (!existingProject) {
+          throw new AppError('Project not found', 404);
+        }
+
+        requireProjectManagement(context, existingProject.department);
+        await requireProjectAccess(context, existingProject._id?.toString() || id);
+
         // Convert GraphQL enums to DB format
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
         if (dbInput.visibility) dbInput.visibility = dbInput.visibility.toLowerCase();
+
+        if (dbInput.department) {
+          requireDepartmentScope(context, dbInput.department);
+        }
         
         const project = await Project.findByIdAndUpdate(id, dbInput, {
           new: true,
@@ -749,7 +877,11 @@ export const projectModule = createModule({
         return project;
       },
 
-      updateProjectProgress: async (_: any, { id, progress }: { id: string; progress: number }) => {
+      updateProjectProgress: async (
+        _: any,
+        { id, progress }: { id: string; progress: number },
+        context: GraphQLContext
+      ) => {
         if (progress < 0 || progress > 100) {
           throw new AppError('Progress must be between 0 and 100', 400);
         }
@@ -757,22 +889,38 @@ export const projectModule = createModule({
         if (!project) {
           throw new AppError('Project not found', 404);
         }
+        requireProjectManagement(context, project.department);
+        await requireProjectAccess(context, project._id?.toString() || id);
         await project.updateProgress(progress);
         return await Project.findById(id).lean(); // Return updated project as lean object
       },
 
       assignUserToProject: async (
         _: any,
-        { projectId, userId, userName, role, department }: any
+        { projectId, userId, userName, role, department }: any,
+        context: GraphQLContext
       ) => {
         const project = await Project.findById(projectId).lean();
         if (!project) {
           throw new AppError('Project not found', 404);
         }
 
+        const currentUser = requireProjectManagement(context, project.department);
+        await requireProjectAccess(context, project._id?.toString() || projectId);
+
         const user = await User.findById(userId);
         if (!user) {
           throw new AppError('User not found', 404);
+        }
+
+        if (!currentUser.isSuperAdmin) {
+          if (!isDepartmentInScope(currentUser, user.department)) {
+            throw new AppError('Cannot assign users outside your department scope', 403);
+          }
+
+          if (department && !isDepartmentInScope(currentUser, department)) {
+            throw new AppError('Cannot assign a project with a mismatched department', 403);
+          }
         }
 
         // Store as GitLab GID format for RBAC compatibility
@@ -793,7 +941,7 @@ export const projectModule = createModule({
         return project;
       },
 
-      unassignUserFromProject: async (_: any, { projectId, userId }: any) => {
+      unassignUserFromProject: async (_: any, { projectId, userId }: any, context: GraphQLContext) => {
         let project = null;
 
         // Try MongoDB ObjectId lookup first
@@ -813,9 +961,16 @@ export const projectModule = createModule({
           throw new AppError('Project not found', 404);
         }
 
+        const currentUser = requireProjectManagement(context, project.department);
+        await requireProjectAccess(context, project._id?.toString() || projectId);
+
         const user = await User.findById(userId);
         if (!user) {
           throw new AppError('User not found', 404);
+        }
+
+        if (!currentUser.isSuperAdmin && !isDepartmentInScope(currentUser, user.department)) {
+          throw new AppError('Cannot unassign users outside your department scope', 403);
         }
 
         // Use GitLab GID format to match the stored format
@@ -833,7 +988,7 @@ export const projectModule = createModule({
         return project;
       },
 
-      deleteProject: async (_: any, { id }: { id: string }) => {
+      deleteProject: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         logger.info('Attempting to delete project', { projectId: id });
 
         // Step 1: Check if project exists
@@ -841,6 +996,9 @@ export const projectModule = createModule({
         if (!project) {
           throw new AppError('Project not found', 404);
         }
+
+        requireProjectManagement(context, project.department);
+        await requireProjectAccess(context, project._id?.toString() || id);
 
         // Step 2: Check for active tasks
         const activeTasksCount = await Task.countDocuments({
@@ -870,7 +1028,8 @@ export const projectModule = createModule({
         return true;
       },
 
-      syncProjectFromGitLab: async (_: any, { input }: any, { gitlabMCP }: any) => {
+      syncProjectFromGitLab: async (_: any, { input }: any, context: GraphQLContext) => {
+        requireProjectManagement(context);
         const { gitlabProjectId } = input;
         
         logger.info(`Syncing project from GitLab: ${gitlabProjectId}`);
@@ -889,7 +1048,8 @@ export const projectModule = createModule({
         }
       },
 
-      syncAllProjectsFromGitLab: async (_: any, { perPage = 50 }: any) => {
+      syncAllProjectsFromGitLab: async (_: any, { perPage = 50 }: any, context: GraphQLContext) => {
+        requireProjectManagement(context);
         logger.info('Syncing all projects from GitLab');
         
         try {

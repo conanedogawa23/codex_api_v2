@@ -288,6 +288,57 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 userUpdates.skills = Array.from(inferredSkills).slice(0, 15);
               }
 
+              const uniqueFieldFilters: Array<Record<string, unknown>> = [];
+              if (typeof userUpdates.email === 'string' && userUpdates.email.trim()) {
+                uniqueFieldFilters.push({ email: userUpdates.email.trim().toLowerCase() });
+                userUpdates.email = userUpdates.email.trim().toLowerCase();
+              }
+              if (typeof userUpdates.username === 'string' && userUpdates.username.trim()) {
+                uniqueFieldFilters.push({ username: userUpdates.username.trim() });
+                userUpdates.username = userUpdates.username.trim();
+              }
+
+              if (uniqueFieldFilters.length > 0) {
+                const conflictingUsers = await User.find({
+                  _id: { $ne: existingUser._id },
+                  $or: uniqueFieldFilters
+                })
+                  .select('_id email username gitlabId')
+                  .lean();
+
+                const emailConflict = conflictingUsers.find(
+                  (conflict) =>
+                    typeof userUpdates.email === 'string' &&
+                    typeof conflict.email === 'string' &&
+                    conflict.email === userUpdates.email
+                );
+                if (emailConflict) {
+                  logger.warn('Skipping conflicting email update during user sync', {
+                    gitlabId: user.gitlabId,
+                    userId: existingUser._id,
+                    conflictingUserId: emailConflict._id,
+                    email: userUpdates.email
+                  });
+                  delete userUpdates.email;
+                }
+
+                const usernameConflict = conflictingUsers.find(
+                  (conflict) =>
+                    typeof userUpdates.username === 'string' &&
+                    typeof conflict.username === 'string' &&
+                    conflict.username === userUpdates.username
+                );
+                if (usernameConflict) {
+                  logger.warn('Skipping conflicting username update during user sync', {
+                    gitlabId: user.gitlabId,
+                    userId: existingUser._id,
+                    conflictingUserId: usernameConflict._id,
+                    username: userUpdates.username
+                  });
+                  delete userUpdates.username;
+                }
+              }
+
               // Update User
               const updatedUser = await User.findByIdAndUpdate(
                 existingUser._id,
@@ -312,10 +363,14 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 hasTimelogs: !!gitlabData.timelogs?.length
               });
 
-              const bulkOps: any[] = [];
+              const issueOps: any[] = [];
+              const mergeRequestOps: any[] = [];
+              const taskOps: any[] = [];
+              const commitOps: any[] = [];
+              const deptOps: any[] = [];
 
               // Issue: Update author and assignees
-              bulkOps.push({
+              issueOps.push({
                 updateMany: {
                   filter: { 'author.id': user.gitlabId },
                   update: {
@@ -329,7 +384,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 }
               });
 
-              bulkOps.push({
+              issueOps.push({
                 updateMany: {
                   filter: { 'assignees.id': user.gitlabId },
                   update: {
@@ -345,7 +400,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               });
 
               // MergeRequest: Update author, assignees, and reviewers
-              bulkOps.push({
+              mergeRequestOps.push({
                 updateMany: {
                   filter: { 'author.id': user.gitlabId },
                   update: {
@@ -359,7 +414,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 }
               });
 
-              bulkOps.push({
+              mergeRequestOps.push({
                 updateMany: {
                   filter: { 'assignees.id': user.gitlabId },
                   update: {
@@ -374,7 +429,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 }
               });
 
-              bulkOps.push({
+              mergeRequestOps.push({
                 updateMany: {
                   filter: { 'reviewers.id': user.gitlabId },
                   update: {
@@ -390,7 +445,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               });
 
               // Task: Update assignedTo and assignedBy
-              bulkOps.push({
+              taskOps.push({
                 updateMany: {
                   filter: { 'assignedTo.id': user.gitlabId.toString() },
                   update: {
@@ -402,7 +457,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 }
               });
 
-              bulkOps.push({
+              taskOps.push({
                 updateMany: {
                   filter: { 'assignedBy.id': user.gitlabId.toString() },
                   update: {
@@ -415,7 +470,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               });
 
               // Commit: Update author details
-              bulkOps.push({
+              commitOps.push({
                 updateMany: {
                   filter: { authorEmail: gitlabData.email },
                   update: {
@@ -428,7 +483,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
               });
 
               // Department: Update head
-              bulkOps.push({
+              deptOps.push({
                 updateMany: {
                   filter: { 'head.id': user.gitlabId.toString() },
                   update: {
@@ -442,15 +497,7 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
 
               // Execute distributed bulk writes
               try {
-                const projectOps = [bulkOps[0]];
-                const issueOps = [bulkOps[1], bulkOps[2]];
-                const mergeRequestOps = [bulkOps[3], bulkOps[4], bulkOps[5]];
-                const taskOps = [bulkOps[6], bulkOps[7]];
-                const commitOps = [bulkOps[8]];
-                const deptOps = [bulkOps[9]];
-
                 // Execute each model's operations
-                if (projectOps.length > 0) await Project.bulkWrite(projectOps);
                 if (issueOps.length > 0) await Issue.bulkWrite(issueOps);
                 if (mergeRequestOps.length > 0) await MergeRequest.bulkWrite(mergeRequestOps);
                 if (taskOps.length > 0) await Task.bulkWrite(taskOps);
@@ -579,6 +626,73 @@ export const processUserSync = async (job: Job<UserSyncJobData>): Promise<UserSy
                 }
                 if (inferredSkills.size > 0) {
                   newUserData.skills = Array.from(inferredSkills);
+                }
+
+                const normalizedUsername = gitlabData.username?.trim() || user.username;
+                const existingUserByIdentity = await User.findOne({
+                  $or: [
+                    { email: emailValue },
+                    { username: normalizedUsername }
+                  ]
+                }).lean();
+
+                if (existingUserByIdentity) {
+                  if (
+                    typeof existingUserByIdentity.gitlabId === 'number' &&
+                    existingUserByIdentity.gitlabId !== user.gitlabId
+                  ) {
+                    usersSkipped++;
+                    logger.warn('Skipping GitLab user sync due to conflicting linked identity', {
+                      existingUserId: existingUserByIdentity._id,
+                      existingGitlabId: existingUserByIdentity.gitlabId,
+                      incomingGitlabId: user.gitlabId,
+                      email: emailValue,
+                      username: normalizedUsername
+                    });
+                    continue;
+                  }
+
+                  if (
+                    existingUserByIdentity.userSource === 'manual' ||
+                    existingUserByIdentity.canSyncFromGitlab === false
+                  ) {
+                    usersSkipped++;
+                    logger.warn('Skipping GitLab user sync for manual or protected local user', {
+                      existingUserId: existingUserByIdentity._id,
+                      incomingGitlabId: user.gitlabId,
+                      email: emailValue,
+                      username: normalizedUsername,
+                      userSource: existingUserByIdentity.userSource,
+                      canSyncFromGitlab: existingUserByIdentity.canSyncFromGitlab
+                    });
+                    continue;
+                  }
+
+                  const reconciledUser = await User.findByIdAndUpdate(
+                    existingUserByIdentity._id,
+                    {
+                      $set: {
+                        ...newUserData,
+                        gitlabId: user.gitlabId,
+                        username: normalizedUsername,
+                        lastSynced: moment().toDate(),
+                        userSource: existingUserByIdentity.userSource || 'gitlab',
+                        canSyncFromGitlab: true
+                      }
+                    },
+                    { new: true }
+                  );
+
+                  if (reconciledUser) {
+                    usersUpdated++;
+                    logger.info('Linked existing local user to GitLab identity during sync', {
+                      userId: reconciledUser._id,
+                      gitlabId: user.gitlabId,
+                      username: reconciledUser.username,
+                      email: reconciledUser.email
+                    });
+                    continue;
+                  }
                 }
 
                 // Create new user in database

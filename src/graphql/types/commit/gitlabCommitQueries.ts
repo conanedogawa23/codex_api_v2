@@ -89,7 +89,7 @@ export const GITLAB_COMMIT_QUERIES = {
   `,
 
   SIMPLE_LIST: `
-    query GetSimpleCommitList($first: Int!, $after: String, $projectPath: ID!) {
+    query GetSimpleCommitList($projectPath: ID!) {
       project(fullPath: $projectPath) {
         repository {
           tree {

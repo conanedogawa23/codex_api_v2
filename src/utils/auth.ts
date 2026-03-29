@@ -3,6 +3,12 @@ import * as jwt from 'jsonwebtoken';
 import { environment } from '../config/environment';
 import { AppError } from '../middleware';
 import { User } from '../models/User';
+import {
+  type AccessRole,
+  type Permission,
+  getPermissionsForAccessRole,
+  normalizeAccessRole,
+} from './accessControl';
 
 export interface AuthenticatedUser {
   userId: string;
@@ -11,6 +17,8 @@ export interface AuthenticatedUser {
   gitlabId?: number;
   department: string;
   role: string;
+  accessRole: AccessRole;
+  permissions: Permission[];
   isSuperAdmin: boolean;
 }
 
@@ -60,7 +68,7 @@ export async function resolveCurrentUserFromToken(token: string | null): Promise
   try {
     const decoded = jwt.verify(token, environment.JWT_SECRET) as TokenPayload;
     const user = await User.findById(decoded.userId)
-      .select('_id email username gitlabId department role isActive isSuperAdmin')
+      .select('_id email username gitlabId department role accessRole isActive isSuperAdmin')
       .lean();
 
     if (!user) {
@@ -78,6 +86,8 @@ export async function resolveCurrentUserFromToken(token: string | null): Promise
       gitlabId: user.gitlabId,
       department: user.department,
       role: user.role,
+      accessRole: normalizeAccessRole(user.accessRole),
+      permissions: getPermissionsForAccessRole(user.accessRole, user.isSuperAdmin === true),
       isSuperAdmin: user.isSuperAdmin === true,
     };
   } catch (error) {

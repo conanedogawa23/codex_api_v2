@@ -17,6 +17,7 @@ import {
   corsMiddleware,
 } from './middleware';
 import { jobManager } from './jobs';
+import { handleGitLabWebhook } from './routes/gitlabWebhook.routes';
 import { mcpBridge } from './services/MCPBridge';
 
 const { useServer } = require('graphql-ws/use/ws');
@@ -189,7 +190,7 @@ class Server {
 
     this.app.post('/jobs/trigger/merge-request-sync', async (req, res) => {
       try {
-        await jobManager.triggerMergeRequestSync();
+        await jobManager.triggerMergeRequestSync(req.body || {});
         res.json({
           success: true,
           message: 'Merge request sync triggered successfully',
@@ -237,10 +238,90 @@ class Server {
 
     this.app.post('/jobs/trigger/pipeline-sync', async (req, res) => {
       try {
-        await jobManager.triggerPipelineSync();
+        await jobManager.triggerPipelineSync(req.body || {});
         res.json({
           success: true,
           message: 'Pipeline sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/commit-sync', async (req, res) => {
+      try {
+        await jobManager.triggerCommitSync(req.body || {});
+        res.json({
+          success: true,
+          message: 'Commit sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/label-sync', async (req, res) => {
+      try {
+        await jobManager.triggerLabelSync();
+        res.json({
+          success: true,
+          message: 'Label sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/milestone-sync', async (req, res) => {
+      try {
+        await jobManager.triggerMilestoneSync();
+        res.json({
+          success: true,
+          message: 'Milestone sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/iteration-sync', async (req, res) => {
+      try {
+        await jobManager.triggerIterationSync();
+        res.json({
+          success: true,
+          message: 'Iteration sync triggered successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        res.status(500).json({
+          success: false,
+          error: error.message,
+        });
+      }
+    });
+
+    this.app.post('/jobs/trigger/event-sync', async (req, res) => {
+      try {
+        await jobManager.triggerEventSync();
+        res.json({
+          success: true,
+          message: 'Event sync triggered successfully',
           timestamp: new Date().toISOString(),
         });
       } catch (error: any) {
@@ -259,6 +340,11 @@ class Server {
         await jobManager.triggerIssueSync();
         await jobManager.triggerNamespaceSync();
         await jobManager.triggerPipelineSync();
+        await jobManager.triggerCommitSync();
+        await jobManager.triggerLabelSync();
+        await jobManager.triggerMilestoneSync();
+        await jobManager.triggerIterationSync();
+        await jobManager.triggerEventSync();
         res.json({
           success: true,
           message: 'All syncs triggered successfully',
@@ -271,6 +357,8 @@ class Server {
         });
       }
     });
+
+    this.app.post('/webhooks/gitlab', handleGitLabWebhook);
 
     // Pause user sync jobs
     this.app.post('/jobs/pause', async (req, res) => {
@@ -338,6 +426,11 @@ class Server {
               issueSync: '/jobs/trigger/issue-sync (POST)',
               namespaceSync: '/jobs/trigger/namespace-sync (POST)',
               pipelineSync: '/jobs/trigger/pipeline-sync (POST)',
+              commitSync: '/jobs/trigger/commit-sync (POST)',
+              labelSync: '/jobs/trigger/label-sync (POST)',
+              milestoneSync: '/jobs/trigger/milestone-sync (POST)',
+              iterationSync: '/jobs/trigger/iteration-sync (POST)',
+              eventSync: '/jobs/trigger/event-sync (POST)',
               all: '/jobs/trigger/all (POST)',
             },
             control: {
@@ -345,6 +438,9 @@ class Server {
               resume: '/jobs/resume (POST)',
               cleanup: '/jobs/cleanup (POST)',
             },
+          },
+          webhooks: {
+            gitlab: '/webhooks/gitlab (POST)',
           },
         },
         documentation: 'Visit /graphql for GraphQL Playground (development only)',
@@ -365,7 +461,11 @@ class Server {
 
   private async initializeJobs(): Promise<void> {
     try {
-      await jobManager.initialize();
+      await jobManager.initialize({
+        scheduleRecurring: false,
+        triggerImmediateSyncs: false,
+        clearPendingJobs: true,
+      });
       logger.info('Background jobs initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize background jobs:', error);

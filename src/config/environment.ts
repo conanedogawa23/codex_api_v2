@@ -24,6 +24,7 @@ export interface EnvironmentConfig {
     apiUrl: string;
     graphqlUrl: string;
     token?: string;
+    webhookSecret?: string;
   };
   email: {
     host: string;
@@ -65,6 +66,7 @@ class Environment {
         apiUrl: process.env.GITLAB_API_URL || 'https://gitlab.com/api/v4',
         graphqlUrl: process.env.GITLAB_GRAPHQL_URL || 'https://gitlab.com/api/graphql',
         token: process.env.GITLAB_PERSONAL_ACCESS_TOKEN,
+        webhookSecret: process.env.GITLAB_WEBHOOK_SECRET,
       },
       email: {
         host: process.env.EMAIL_HOST || '',

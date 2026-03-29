@@ -5,8 +5,10 @@ import { SprintRepo } from '../../../models/SprintRepo';
 import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canManageDepartmentSprints } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
-import { getAccessibleSprintRepoIds } from '../../../utils/rbac';
+import { requireSprintRepoAccess, withSprintRepoFilter } from '../../../utils/rbac';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -44,6 +46,22 @@ function buildSprintStatusConditions(status: string): Record<string, unknown>[] 
     default:
       return [{ status: status.toLowerCase() }];
   }
+}
+
+async function requireSprintManagement(
+  context: GraphQLContext,
+  sprintRepoId?: string | null
+) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentSprints(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (sprintRepoId) {
+    await requireSprintRepoAccess(context, String(sprintRepoId));
+  }
+
+  return currentUser;
 }
 
 export const sprintModule = createModule({
@@ -255,12 +273,14 @@ export const sprintModule = createModule({
     },
 
     Query: {
-      sprint: async (_: any, { id }: { id: string }) => {
+      sprint: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           const sprint = await Sprint.findById(id).lean();
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+          await requireSprintRepoAccess(context, sprint.sprintRepoId?.toString());
           return sprint;
         } catch (error) {
           logger.error('Error fetching sprint', { id, error });
@@ -286,35 +306,12 @@ export const sprintModule = createModule({
           search?: string;
           userId?: string;
           userRole?: string;
-        }
+        },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const andConditions: Record<string, unknown>[] = [{ isActive: true }];
-
-          // Apply role-based filtering if userId and userRole are provided
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return {
-                sprints: [],
-                totalCount: 0,
-              };
-            }
-            
-            // If not admin and has accessible repos, filter by them
-            if (accessibleSprintRepoIds.length > 0) {
-              andConditions.push({
-                sprintRepoId: {
-                  $in: accessibleSprintRepoIds
-                    .filter((id) => mongoose.Types.ObjectId.isValid(id))
-                    .map((id) => new mongoose.Types.ObjectId(id)),
-                },
-              });
-            }
-            // If accessibleSprintRepoIds is empty array, user is admin - no filtering needed
-          }
 
           if (sprintRepoId) {
             if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
@@ -345,14 +342,15 @@ export const sprintModule = createModule({
           }
 
           const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+          const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
 
           const [sprints, totalCount] = await Promise.all([
-            Sprint.find(filter)
+            Sprint.find(scopedFilter)
               .sort({ startDate: -1 })
               .limit(limit)
               .skip(offset)
               .lean(),
-            Sprint.countDocuments(filter),
+            Sprint.countDocuments(scopedFilter),
           ]);
 
           return {
@@ -370,19 +368,11 @@ export const sprintModule = createModule({
 
       sprintsBySprintRepo: async (
         _: any,
-        { sprintRepoId, status, limit, userId, userRole }: { sprintRepoId: string; status?: string; limit: number; userId?: string; userRole?: string }
+        { sprintRepoId, status, limit, userId, userRole }: { sprintRepoId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        context: GraphQLContext
       ) => {
         try {
-          // Apply role-based access control
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // Check if user has access to this specific sprint repo
-            if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(sprintRepoId)) {
-              // User doesn't have access to this sprint repo
-              return [];
-            }
-          }
+          requireCurrentUser(context);
 
           // Use raw MongoDB collection to bypass Mongoose schema casting
           // (sprintRepoId is defined as String in schema but stored as ObjectId in DB)
@@ -402,8 +392,10 @@ export const sprintModule = createModule({
             filter.status = status.toLowerCase();
           }
 
+          const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
+
           const results = await sprintsCollection
-            .find(filter)
+            .find(scopedFilter)
             .sort({ startDate: -1 })
             .limit(limit)
             .toArray();
@@ -417,9 +409,11 @@ export const sprintModule = createModule({
 
       sprintsByAssignee: async (
         _: any,
-        { userId, status, limit }: { userId: string; status?: string; limit: number }
+        { userId, status, limit }: { userId: string; status?: string; limit: number },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           // Note: assignees.id is stored as string in the database, no ObjectId conversion needed
           const filter: any = { 'assignees.id': userId, isActive: true };
           if (status) {
@@ -427,7 +421,9 @@ export const sprintModule = createModule({
             filter.status = status.toLowerCase();
           }
 
-          return await Sprint.find(filter)
+          const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
+
+          return await Sprint.find(scopedFilter)
             .sort({ startDate: -1 })
             .limit(limit)
             .lean();
@@ -437,36 +433,22 @@ export const sprintModule = createModule({
         }
       },
 
-      activeSprints: async (_: any, { sprintRepoId, userId, userRole }: { sprintRepoId?: string; userId?: string; userRole?: string }) => {
+      activeSprints: async (
+        _: any,
+        { sprintRepoId, userId, userRole }: { sprintRepoId?: string; userId?: string; userRole?: string },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = { status: 'active', isActive: true };
 
-          // Apply role-based filtering
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
-            }
-            
-            if (sprintRepoId) {
-              // Check if user has access to the specific sprint repo
-              if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(sprintRepoId)) {
-                return [];  // User doesn't have access
-              }
-              filter.sprintRepoId = sprintRepoId;
-            } else {
-              // Filter by accessible sprint repos if not admin
-              if (accessibleSprintRepoIds.length > 0) {
-                filter.sprintRepoId = { $in: accessibleSprintRepoIds };
-              }
-            }
-          } else if (sprintRepoId) {
+          if (sprintRepoId) {
             filter.sprintRepoId = sprintRepoId;
           }
 
-          return await Sprint.find(filter)
+          const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
+
+          return await Sprint.find(scopedFilter)
             .sort({ startDate: -1 })
             .lean();
         } catch (error) {
@@ -477,8 +459,10 @@ export const sprintModule = createModule({
     },
 
     Mutation: {
-      createSprint: async (_: any, { input }: { input: any }) => {
+      createSprint: async (_: any, { input }: { input: any }, context: GraphQLContext) => {
         try {
+          await requireSprintManagement(context, input.sprintRepoId);
+
           // Validate dates
           if (new Date(input.endDate) <= new Date(input.startDate)) {
             throw new AppError('End date must be after start date', 400);
@@ -524,8 +508,22 @@ export const sprintModule = createModule({
         }
       },
 
-      updateSprint: async (_: any, { id, input }: { id: string; input: any }) => {
+      updateSprint: async (
+        _: any,
+        { id, input }: { id: string; input: any },
+        context: GraphQLContext
+      ) => {
         try {
+          const existingSprint = await Sprint.findById(id).lean();
+          if (!existingSprint) {
+            throw new AppError('Sprint not found', 404);
+          }
+
+          await requireSprintManagement(context, existingSprint.sprintRepoId?.toString());
+          if (input.sprintRepoId) {
+            await requireSprintManagement(context, input.sprintRepoId);
+          }
+
           // Validate dates if both are provided
           if (input.startDate && input.endDate) {
             if (new Date(input.endDate) <= new Date(input.startDate)) {
@@ -551,8 +549,15 @@ export const sprintModule = createModule({
         }
       },
 
-      deleteSprint: async (_: any, { id }: { id: string }) => {
+      deleteSprint: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          const existingSprint = await Sprint.findById(id).lean();
+          if (!existingSprint) {
+            throw new AppError('Sprint not found', 404);
+          }
+
+          await requireSprintManagement(context, existingSprint.sprintRepoId?.toString());
+
           // Soft delete
           const sprint = await Sprint.findByIdAndUpdate(
             id,
@@ -578,12 +583,14 @@ export const sprintModule = createModule({
         }
       },
 
-      startSprint: async (_: any, { id }: { id: string }) => {
+      startSprint: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
           const sprint = await Sprint.findById(id);
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+
+          await requireSprintManagement(context, sprint.sprintRepoId?.toString());
 
           if (sprint.status !== 'planned') {
             throw new AppError('Only planned sprints can be started', 400);
@@ -600,12 +607,18 @@ export const sprintModule = createModule({
         }
       },
 
-      completeSprint: async (_: any, { id, velocity }: { id: string; velocity?: number }) => {
+      completeSprint: async (
+        _: any,
+        { id, velocity }: { id: string; velocity?: number },
+        context: GraphQLContext
+      ) => {
         try {
           const sprint = await Sprint.findById(id);
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+
+          await requireSprintManagement(context, sprint.sprintRepoId?.toString());
 
           if (sprint.status !== 'active') {
             throw new AppError('Only active sprints can be completed', 400);
@@ -637,13 +650,16 @@ export const sprintModule = createModule({
 
       assignUserToSprint: async (
         _: any,
-        { sprintId, userId, userName, email }: { sprintId: string; userId: string; userName: string; email: string }
+        { sprintId, userId, userName, email }: { sprintId: string; userId: string; userName: string; email: string },
+        context: GraphQLContext
       ) => {
         try {
           const sprint = await Sprint.findById(sprintId);
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+
+          await requireSprintManagement(context, sprint.sprintRepoId?.toString());
 
           await sprint.assignUser(userId, userName, email);
           logger.info('User assigned to sprint', { sprintId, userId });
@@ -656,13 +672,16 @@ export const sprintModule = createModule({
 
       unassignUserFromSprint: async (
         _: any,
-        { sprintId, userId }: { sprintId: string; userId: string }
+        { sprintId, userId }: { sprintId: string; userId: string },
+        context: GraphQLContext
       ) => {
         try {
           const sprint = await Sprint.findById(sprintId);
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+
+          await requireSprintManagement(context, sprint.sprintRepoId?.toString());
 
           await sprint.unassignUser(userId);
           logger.info('User unassigned from sprint', { sprintId, userId });
@@ -675,13 +694,16 @@ export const sprintModule = createModule({
 
       updateSprintProgress: async (
         _: any,
-        { sprintId, totalTasks, completedTasks }: { sprintId: string; totalTasks: number; completedTasks: number }
+        { sprintId, totalTasks, completedTasks }: { sprintId: string; totalTasks: number; completedTasks: number },
+        context: GraphQLContext
       ) => {
         try {
           const sprint = await Sprint.findById(sprintId);
           if (!sprint) {
             throw new AppError('Sprint not found', 404);
           }
+
+          await requireSprintManagement(context, sprint.sprintRepoId?.toString());
 
           await sprint.updateProgress(totalTasks, completedTasks);
           logger.info('Sprint progress updated', { sprintId, totalTasks, completedTasks });

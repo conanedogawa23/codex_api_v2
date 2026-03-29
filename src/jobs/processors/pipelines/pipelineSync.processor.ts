@@ -4,14 +4,15 @@ import { Pipeline, IPipeline } from '../../../models/Pipeline';
 import { logger } from '../../../utils/logger';
 import { gitlabPipelineProcessor } from './gitlabPipelineProcessor';
 import moment from 'moment-timezone';
+import { fetchAcrossActiveProjects, ProjectScopedSyncOptions } from '../shared/projectSyncTargets';
 
-export interface PipelineSyncJobData extends SyncOptions {
+export interface PipelineSyncJobData extends ProjectScopedSyncOptions {
   projectPath?: string;
 }
 
 class PipelineSyncProcessor extends BaseSyncProcessor<IPipeline> {
   readonly entityName = 'pipeline';
-  readonly categories = ['coreData', 'jobs', 'testReports', 'variables', 'artifacts'];
+  readonly categories = ['coreData'];
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const projectPath = (options as PipelineSyncJobData).projectPath;
@@ -20,32 +21,21 @@ class PipelineSyncProcessor extends BaseSyncProcessor<IPipeline> {
       return await gitlabPipelineProcessor.fetchSimplePipelines(options.batchSize || 100, projectPath);
     }
 
-    // No projectPath - fetch pipelines from all active projects
     logger.info('Fetching pipelines from all active projects');
-    const Project = require('../../../models/Project').Project;
-    const projects = await Project.find({ isActive: true })
-      .select('pathWithNamespace')
-      .lean();
+    const allPipelines = await fetchAcrossActiveProjects(
+      'pipelines',
+      options as PipelineSyncJobData,
+      async (project) => gitlabPipelineProcessor.fetchSimplePipelines(
+        options.batchSize || 100,
+        project.pathWithNamespace
+      )
+    );
 
-    logger.info('Found active projects for pipeline sync', { count: projects.length });
-
-    const allPipelines: any[] = [];
-    for (const project of projects) {
-      try {
-        const pipelines = await gitlabPipelineProcessor.fetchSimplePipelines(
-          options.batchSize || 100,
-          project.pathWithNamespace
-        );
-        allPipelines.push(...pipelines);
-      } catch (error) {
-        logger.warn('Failed to fetch pipelines for project', {
-          projectPath: project.pathWithNamespace,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    }
-
-    logger.info('Fetched pipelines from all projects', { totalPipelines: allPipelines.length });
+    logger.info('Fetched pipelines from all projects', {
+      totalPipelines: allPipelines.length,
+      projectOffset: (options as PipelineSyncJobData).projectOffset || 0,
+      projectLimit: (options as PipelineSyncJobData).projectLimit || 'all'
+    });
     return allPipelines;
   }
 
@@ -149,23 +139,29 @@ class PipelineSyncProcessor extends BaseSyncProcessor<IPipeline> {
 
     return {
       gitlabId,
-      projectId: pipeline.project?.id ? String(this.extractNumericId(pipeline.project.id)) : '',
+      projectId: pipeline.projectId
+        ? String(pipeline.projectId)
+        : pipeline.project_id
+          ? String(pipeline.project_id)
+          : pipeline.project?.id
+            ? String(this.extractNumericId(pipeline.project.id))
+            : '',
       ref: pipeline.ref || '',
       sha: pipeline.sha || '',
       status: pipeline.status || 'pending',
       source: pipeline.source || '',
-      beforeSha: pipeline.beforeSha || undefined,
+      beforeSha: pipeline.beforeSha || pipeline.before_sha || undefined,
       tag: pipeline.tag || false,
-      webUrl: pipeline.webUrl || '',
+      webUrl: pipeline.webUrl || pipeline.web_url || '',
       duration: pipeline.duration || undefined,
-      queuedDuration: pipeline.queuedDuration || undefined,
+      queuedDuration: pipeline.queuedDuration || pipeline.queued_duration || undefined,
       coverage: pipeline.coverage || undefined,
       jobIds: [],
-      createdAt: pipeline.createdAt ? new Date(pipeline.createdAt) : syncTime,
-      updatedAt: pipeline.updatedAt ? new Date(pipeline.updatedAt) : syncTime,
-      startedAt: pipeline.startedAt ? new Date(pipeline.startedAt) : undefined,
-      finishedAt: pipeline.finishedAt ? new Date(pipeline.finishedAt) : undefined,
-      committedAt: pipeline.committedAt ? new Date(pipeline.committedAt) : undefined,
+      createdAt: pipeline.createdAt || pipeline.created_at ? new Date(pipeline.createdAt || pipeline.created_at) : syncTime,
+      updatedAt: pipeline.updatedAt || pipeline.updated_at ? new Date(pipeline.updatedAt || pipeline.updated_at) : syncTime,
+      startedAt: pipeline.startedAt || pipeline.started_at ? new Date(pipeline.startedAt || pipeline.started_at) : undefined,
+      finishedAt: pipeline.finishedAt || pipeline.finished_at ? new Date(pipeline.finishedAt || pipeline.finished_at) : undefined,
+      committedAt: pipeline.committedAt || pipeline.committed_at ? new Date(pipeline.committedAt || pipeline.committed_at) : undefined,
       lastSyncedAt: syncTime,
       isDeleted: false,
       syncTimestamps: {}
@@ -204,20 +200,7 @@ class PipelineSyncProcessor extends BaseSyncProcessor<IPipeline> {
       return false;
     }
     const pipeline = gitlabData.pipelines[0];
-    switch (category) {
-      case 'coreData':
-        return !!(pipeline.id && pipeline.status);
-      case 'jobs':
-        return !!(pipeline.jobs !== undefined);
-      case 'testReports':
-        return !!(pipeline.testReportSummary !== undefined);
-      case 'variables':
-        return !!(pipeline.variables !== undefined);
-      case 'artifacts':
-        return !!(pipeline.artifacts !== undefined);
-      default:
-        return super.isCategoryDataAvailable(gitlabData, category);
-    }
+    return category === 'coreData' && !!(pipeline.id && pipeline.status);
   }
 
   private extractNumericId(globalId: string): number {

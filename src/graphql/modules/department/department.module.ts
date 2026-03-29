@@ -5,8 +5,11 @@ import { User } from '../../../models/User';
 import { Project } from '../../../models/Project';
 import { Namespace } from '../../../models/Namespace';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canManageDepartmentProjects, canManageDepartmentUsers } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import { fixDepartmentData } from '../../../utils/migrations/fixDepartmentData';
+import { requireDepartmentScope } from '../../../utils/rbac';
 
 type DepartmentMemberUser = {
   _id: { toString(): string };
@@ -123,6 +126,40 @@ async function findProjectByDepartmentProjectIdentifier(projectIdentifier: strin
   return null;
 }
 
+function requireDepartmentVisibility(context: GraphQLContext, departmentName: string) {
+  const currentUser = requireCurrentUser(context);
+  if (!currentUser.isSuperAdmin) {
+    requireDepartmentScope(context, departmentName);
+  }
+  return currentUser;
+}
+
+function requireDepartmentUserManagement(context: GraphQLContext, departmentName: string) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentUsers(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+  requireDepartmentScope(context, departmentName);
+  return currentUser;
+}
+
+function requireDepartmentProjectManagement(context: GraphQLContext, departmentName: string) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentProjects(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+  requireDepartmentScope(context, departmentName);
+  return currentUser;
+}
+
+function requirePlatformSuperAdmin(context: GraphQLContext) {
+  const currentUser = requireCurrentUser(context);
+  if (!currentUser.isSuperAdmin) {
+    throw new AppError('Forbidden', 403);
+  }
+  return currentUser;
+}
+
 export const departmentModule = createModule({
   id: 'department',
   typeDefs: gql`
@@ -221,7 +258,8 @@ export const departmentModule = createModule({
       projectCount: (parent: any) => parent.projects?.length || 0,
       
       // Resolve members as User objects
-      members: async (parent: any) => {
+      members: async (parent: any, _: any, context: GraphQLContext) => {
+        requireDepartmentVisibility(context, parent.name);
         if (!parent.members || parent.members.length === 0) {
           return [];
         }
@@ -274,7 +312,8 @@ export const departmentModule = createModule({
       },
       
       // Resolve projects as Project objects
-      projects: async (parent: any) => {
+      projects: async (parent: any, _: any, context: GraphQLContext) => {
+        requireDepartmentVisibility(context, parent.name);
         if (!parent.projects || parent.projects.length === 0) {
           return [];
         }
@@ -336,7 +375,7 @@ export const departmentModule = createModule({
     },
     
     Query: {
-      department: async (_: any, { id }: { id: string }) => {
+      department: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         logger.info('Fetching department by ID', { id });
         
         const department = await Department.findById(id).lean();
@@ -344,11 +383,13 @@ export const departmentModule = createModule({
         if (!department) {
           throw new AppError(`Department with ID ${id} not found`, 404);
         }
+
+        requireDepartmentVisibility(context, department.name);
         
         return department;
       },
 
-      departmentByName: async (_: any, { name }: { name: string }) => {
+      departmentByName: async (_: any, { name }: { name: string }, context: GraphQLContext) => {
         logger.info('Fetching department by name', { name });
         
         const department = await Department.findOne({ name }).lean();
@@ -356,15 +397,26 @@ export const departmentModule = createModule({
         if (!department) {
           throw new AppError(`Department with name ${name} not found`, 404);
         }
+
+        requireDepartmentVisibility(context, department.name);
         
         return department;
       },
 
-      departments: async (_: any, { isActive, limit, offset }: { isActive?: boolean; limit: number; offset: number }) => {
+      departments: async (
+        _: any,
+        { isActive, limit, offset }: { isActive?: boolean; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
         logger.info('Fetching departments', { isActive, limit, offset });
-        
+
+        const currentUser = requireCurrentUser(context);
         const filter: any = {};
         if (isActive !== undefined) filter.isActive = isActive;
+
+        if (!currentUser.isSuperAdmin) {
+          filter.name = requireDepartmentScope(context, currentUser.department);
+        }
         
         return await Department.find(filter)
           .limit(limit)
@@ -373,17 +425,30 @@ export const departmentModule = createModule({
           .lean();
       },
 
-      activeDepartments: async () => {
+      activeDepartments: async (_: any, __: any, context: GraphQLContext) => {
         logger.info('Fetching active departments');
-        
-        return await Department.find({ isActive: true })
+
+        const currentUser = requireCurrentUser(context);
+        const filter = currentUser.isSuperAdmin
+          ? { isActive: true }
+          : {
+              isActive: true,
+              name: requireDepartmentScope(context, currentUser.department),
+            };
+
+        return await Department.find(filter)
           .sort({ name: 1 })
           .lean();
       },
     },
 
     Mutation: {
-      updateDepartment: async (_: any, { id, input }: { id: string; input: { name?: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string; isActive?: boolean } }) => {
+      updateDepartment: async (
+        _: any,
+        { id, input }: { id: string; input: { name?: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string; isActive?: boolean } },
+        context: GraphQLContext
+      ) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Updating department', { id, fields: Object.keys(input) });
 
         const department = await Department.findById(id);
@@ -414,7 +479,12 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      createDepartment: async (_: any, { input }: { input: { name: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string } }) => {
+      createDepartment: async (
+        _: any,
+        { input }: { input: { name: string; description?: string; head?: { id: string; name: string; email: string }; budget?: number; location?: string } },
+        context: GraphQLContext
+      ) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Creating new department', { name: input.name });
 
         // Check for duplicate name
@@ -441,7 +511,11 @@ export const departmentModule = createModule({
         return created!;
       },
 
-      addMemberToDepartment: async (_: any, { departmentId, userId }: { departmentId: string; userId: string }) => {
+      addMemberToDepartment: async (
+        _: any,
+        { departmentId, userId }: { departmentId: string; userId: string },
+        context: GraphQLContext
+      ) => {
         logger.info('Adding member to department', { departmentId, userId });
         
         const department = await Department.findById(departmentId);
@@ -449,6 +523,8 @@ export const departmentModule = createModule({
         if (!department) {
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
+
+        const currentUser = requireDepartmentUserManagement(context, department.name);
 
         const user = await findUserByDepartmentMemberIdentifier(userId);
         
@@ -460,6 +536,19 @@ export const departmentModule = createModule({
 
         if (!isEligibleDepartmentMember(user)) {
           throw new AppError(`Cannot add non-human account (${memberType}) to department`, 400);
+        }
+
+        if (!currentUser.isSuperAdmin && user.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
+        }
+
+        if (
+          !currentUser.isSuperAdmin &&
+          user.department &&
+          user.department !== department.name &&
+          user.department !== 'General'
+        ) {
+          throw new AppError('Cannot reassign a user from another department', 403);
         }
 
         const memberIdentifier = buildDepartmentMemberIdentifier(user);
@@ -489,7 +578,11 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      removeMemberFromDepartment: async (_: any, { departmentId, userId }: { departmentId: string; userId: string }) => {
+      removeMemberFromDepartment: async (
+        _: any,
+        { departmentId, userId }: { departmentId: string; userId: string },
+        context: GraphQLContext
+      ) => {
         logger.info('Removing member from department', { departmentId, userId });
         
         const department = await Department.findById(departmentId);
@@ -498,10 +591,18 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
+        const currentUser = requireDepartmentUserManagement(context, department.name);
+
         const user = await findUserByDepartmentMemberIdentifier(userId);
         const identifiersToRemove = new Set([userId]);
 
         if (user) {
+          if (!currentUser.isSuperAdmin && user.isSuperAdmin) {
+            throw new AppError('Forbidden', 403);
+          }
+          if (!currentUser.isSuperAdmin && user.department !== department.name) {
+            throw new AppError('Cannot remove a user outside your department scope', 403);
+          }
           buildDepartmentMemberAliases(user).forEach((identifier) => identifiersToRemove.add(identifier));
         }
 
@@ -530,7 +631,11 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      addProjectToDepartment: async (_: any, { departmentId, projectId }: { departmentId: string; projectId: string }) => {
+      addProjectToDepartment: async (
+        _: any,
+        { departmentId, projectId }: { departmentId: string; projectId: string },
+        context: GraphQLContext
+      ) => {
         logger.info('Adding project to department', { departmentId, projectId });
         
         const department = await Department.findById(departmentId);
@@ -538,6 +643,8 @@ export const departmentModule = createModule({
         if (!department) {
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
+
+        const currentUser = requireDepartmentProjectManagement(context, department.name);
 
         const project = await findProjectByDepartmentProjectIdentifier(projectId);
 
@@ -547,6 +654,10 @@ export const departmentModule = createModule({
 
         if (project.isActive === false) {
           throw new AppError(`Cannot add inactive project ${projectId} to department`, 400);
+        }
+
+        if (!currentUser.isSuperAdmin && project.department && project.department !== department.name) {
+          throw new AppError('Cannot reassign a project from another department', 403);
         }
 
         const projectIdentifier = buildDepartmentProjectIdentifier(project);
@@ -591,7 +702,11 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      removeProjectFromDepartment: async (_: any, { departmentId, projectId }: { departmentId: string; projectId: string }) => {
+      removeProjectFromDepartment: async (
+        _: any,
+        { departmentId, projectId }: { departmentId: string; projectId: string },
+        context: GraphQLContext
+      ) => {
         logger.info('Removing project from department', { departmentId, projectId });
         
         const department = await Department.findById(departmentId);
@@ -600,10 +715,15 @@ export const departmentModule = createModule({
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
 
+        const currentUser = requireDepartmentProjectManagement(context, department.name);
+
         const project = await findProjectByDepartmentProjectIdentifier(projectId);
         const identifiersToRemove = new Set([projectId]);
 
         if (project) {
+          if (!currentUser.isSuperAdmin && project.department && project.department !== department.name) {
+            throw new AppError('Cannot remove a project outside your department scope', 403);
+          }
           buildDepartmentProjectAliases(project).forEach((identifier) => identifiersToRemove.add(identifier));
         }
 
@@ -626,7 +746,11 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      syncDepartmentMembers: async (_: any, { departmentId }: { departmentId: string }) => {
+      syncDepartmentMembers: async (
+        _: any,
+        { departmentId }: { departmentId: string },
+        context: GraphQLContext
+      ) => {
         logger.info('Syncing department members from users.department field', { departmentId });
         
         const department = await Department.findById(departmentId);
@@ -634,6 +758,8 @@ export const departmentModule = createModule({
         if (!department) {
           throw new AppError(`Department with ID ${departmentId} not found`, 404);
         }
+
+        requireDepartmentUserManagement(context, department.name);
 
         // Find all HUMAN users in this department
         const deptUsers = await User.find({ 
@@ -658,7 +784,8 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      syncAllDepartments: async () => {
+      syncAllDepartments: async (_: any, __: any, context: GraphQLContext) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Syncing all departments from users.department field');
         
         const allDepartments = await Department.find({ isActive: true });
@@ -688,7 +815,12 @@ export const departmentModule = createModule({
         return updated;
       },
 
-      linkDepartmentToNamespace: async (_: any, { departmentId, namespaceId }: { departmentId: string; namespaceId: string }) => {
+      linkDepartmentToNamespace: async (
+        _: any,
+        { departmentId, namespaceId }: { departmentId: string; namespaceId: string },
+        context: GraphQLContext
+      ) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Linking department to namespace', { departmentId, namespaceId });
         
         const department = await Department.findById(departmentId);
@@ -716,7 +848,12 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      unlinkDepartmentFromNamespace: async (_: any, { departmentId }: { departmentId: string }) => {
+      unlinkDepartmentFromNamespace: async (
+        _: any,
+        { departmentId }: { departmentId: string },
+        context: GraphQLContext
+      ) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Unlinking department from namespace', { departmentId });
         
         const department = await Department.findById(departmentId);
@@ -733,7 +870,8 @@ export const departmentModule = createModule({
         return updated!;
       },
 
-      runDepartmentMigration: async () => {
+      runDepartmentMigration: async (_: any, __: any, context: GraphQLContext) => {
+        requirePlatformSuperAdmin(context);
         logger.info('Starting department data migration via GraphQL mutation');
         
         try {

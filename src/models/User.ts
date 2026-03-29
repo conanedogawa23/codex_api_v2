@@ -1,5 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+import { ACCESS_ROLE_VALUES, DEFAULT_ACCESS_ROLE, type AccessRole } from '../utils/accessControl';
+
 // Static method interfaces
 interface IUserModel extends mongoose.Model<IUser> {
   findByGitlabId(gitlabId: number): Promise<IUser | null>;
@@ -14,6 +16,7 @@ export interface IUser extends Document {
   email: string;
   username: string;
   role: string;
+  accessRole: AccessRole;
   department: string;
   avatar?: string;
   joinDate: Date;
@@ -199,6 +202,13 @@ const UserSchema: Schema = new Schema({
     type: String,
     required: true,
     trim: true
+  },
+  accessRole: {
+    type: String,
+    enum: ACCESS_ROLE_VALUES,
+    default: DEFAULT_ACCESS_ROLE,
+    required: true,
+    index: true
   },
   department: {
     type: String,
@@ -426,6 +436,7 @@ UserSchema.index({ userSource: 1, email: 1 });
 UserSchema.index({ userSource: 1, status: 1 });
 UserSchema.index({ canSyncFromGitlab: 1 });
 UserSchema.index({ department: 1, userType: 1 });
+UserSchema.index({ accessRole: 1, department: 1 });
 UserSchema.index({ isSuperAdmin: 1 });
 
 // Virtual for full name

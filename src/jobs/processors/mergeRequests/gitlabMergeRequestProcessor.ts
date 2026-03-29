@@ -7,7 +7,7 @@ import { GITLAB_MERGE_REQUEST_QUERIES } from '../../../graphql/types/mergeReques
  * Handles comprehensive MR data fetching from GitLab API using multiple parallel queries
  * 
  * Architecture:
- * - Uses 8 parallel queries for comprehensive data coverage
+ * - Uses the stable GraphQL categories available on this GitLab deployment
  * - Each query fetches a specific data category
  * - All queries execute in parallel using Promise.allSettled for optimal performance
  * - Individual query failures don't stop the entire sync process
@@ -140,7 +140,7 @@ export class GitlabMergeRequestProcessor {
   }
 
   /**
-   * Fetch comprehensive MR data using individual queries
+   * Fetch comprehensive MR data using the stable individual queries
    * Fetches each MR one at a time with all category data
    * Uses Promise.allSettled to ensure individual query failures don't stop the sync
    */
@@ -163,27 +163,14 @@ export class GitlabMergeRequestProcessor {
       try {
         const gitlabId = `gid://gitlab/MergeRequest/${mrId}`;
         
-        // Fetch all categories for this single MR in parallel
         const results = await Promise.allSettled([
           this.executeCategory('CORE_DATA', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CORE_DATA, { id: gitlabId })),
           this.executeCategory('REVIEWERS_ASSIGNEES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.REVIEWERS_ASSIGNEES, { id: gitlabId })),
-          this.executeCategory('APPROVALS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.APPROVALS, { id: gitlabId })),
-          this.executeCategory('PIPELINES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.PIPELINES, { id: gitlabId })),
-          this.executeCategory('DIFF_STATS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DIFF_STATS, { id: gitlabId })),
-          this.executeCategory('DISCUSSIONS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.DISCUSSIONS, { id: gitlabId })),
-          this.executeCategory('COMMITS', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.COMMITS, { id: gitlabId })),
-          this.executeCategory('CHANGES', gitlabApiClient.executeQuery(GITLAB_MERGE_REQUEST_QUERIES.CHANGES, { id: gitlabId }))
         ]);
 
         const [
           coreDataResult,
           reviewersAssigneesResult,
-          approvalsResult,
-          pipelinesResult,
-          diffStatsResult,
-          discussionsResult,
-          commitsResult,
-          changesResult
         ] = results.map((result, index) => {
           if (result.status === 'rejected') {
             const categoryName = this.getCategoryName(index);
@@ -201,19 +188,13 @@ export class GitlabMergeRequestProcessor {
         if (coreDataResult && coreDataResult.data?.mergeRequest) {
           const mergedMR = this.mergeSingleMergeRequestData(
             coreDataResult.data.mergeRequest,
-            reviewersAssigneesResult?.data?.mergeRequest,
-            approvalsResult?.data?.mergeRequest,
-            pipelinesResult?.data?.mergeRequest,
-            diffStatsResult?.data?.mergeRequest,
-            discussionsResult?.data?.mergeRequest,
-            commitsResult?.data?.mergeRequest,
-            changesResult?.data?.mergeRequest
+            reviewersAssigneesResult?.data?.mergeRequest
           );
 
           allMergeRequests.push(mergedMR);
 
           const successfulCategories = results.filter(r => r.status === 'fulfilled').length;
-          logger.debug(`Fetched MR ${mrId} with ${successfulCategories}/8 categories`);
+          logger.debug(`Fetched MR ${mrId} with ${successfulCategories}/2 categories`);
         } else {
           logger.warn(`No core data for MR ${mrId} - skipping`);
         }
@@ -277,12 +258,6 @@ export class GitlabMergeRequestProcessor {
     const categories = [
       'CORE_DATA',
       'REVIEWERS_ASSIGNEES',
-      'APPROVALS',
-      'PIPELINES',
-      'DIFF_STATS',
-      'DISCUSSIONS',
-      'COMMITS',
-      'CHANGES'
     ];
     return categories[index] || `Unknown_${index}`;
   }
@@ -293,12 +268,6 @@ export class GitlabMergeRequestProcessor {
   private mergeSingleMergeRequestData(
     coreData: any,
     reviewersAssignees: any,
-    approvals: any,
-    pipelines: any,
-    diffStats: any,
-    discussions: any,
-    commits: any,
-    changes: any
   ): any {
     return {
       ...coreData,
@@ -306,20 +275,6 @@ export class GitlabMergeRequestProcessor {
       assignees: reviewersAssignees?.assignees || { nodes: [] },
       reviewers: reviewersAssignees?.reviewers || { nodes: [] },
       mergedBy: reviewersAssignees?.mergedBy || null,
-      approved: approvals?.approved || false,
-      approvedBy: approvals?.approvedBy || { nodes: [] },
-      approvalsLeft: approvals?.approvalsLeft || 0,
-      approvalsRequired: approvals?.approvalsRequired || 0,
-      approvalState: approvals?.approvalState || null,
-      headPipeline: pipelines?.headPipeline || null,
-      pipelines: pipelines?.pipelines || { nodes: [], count: 0 },
-      diffStats: diffStats?.diffStats || null,
-      diffStatsSummary: diffStats?.diffStatsSummary || null,
-      discussions: discussions?.discussions || { nodes: [] },
-      commits: commits?.commits || { nodes: [], count: 0 },
-      commitCount: commits?.commitCount || 0,
-      diffRefs: changes?.diffRefs || null,
-      diffHeadSha: changes?.diffHeadSha || null
     };
   }
 }

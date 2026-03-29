@@ -1,29 +1,39 @@
 import { logger } from '../../../utils/logger';
-import { gitlabApiClient } from '../../../utils/gitlabApiClient';
-import { GITLAB_EVENT_QUERIES } from '../../../graphql/types/event/gitlabEventQueries';
+import { Project } from '../../../models/Project';
+import { gitlabApi } from '../../../utils/gitlabApi';
 
 export class GitlabEventProcessor {
   async fetchSimpleEvents(batchSize: number = 100): Promise<any[]> {
     const allEvents: any[] = [];
-    let hasNextPage = true;
-    let after: string | null = null;
+    const perProjectLimit = Math.max(1, Math.min(batchSize, 100));
 
     try {
-      while (hasNextPage) {
-        const result = await gitlabApiClient.executeQuery(GITLAB_EVENT_QUERIES.SIMPLE_LIST, {
-          first: batchSize,
-          after
-        });
+      const activeProjects = await Project.find({
+        isActive: true,
+        pathWithNamespace: { $exists: true, $ne: '' }
+      })
+        .select('gitlabId pathWithNamespace')
+        .lean();
 
-        const data: any = (result as any)?.data?.events;
-        if (data?.nodes) {
-          allEvents.push(...data.nodes);
-          hasNextPage = data.pageInfo?.hasNextPage || false;
-          after = data.pageInfo?.endCursor || null;
-        } else {
-          hasNextPage = false;
+      for (const project of activeProjects) {
+        try {
+          const events = await gitlabApi.getProjectEvents(project.pathWithNamespace, perProjectLimit);
+          allEvents.push(
+            ...events.map((event) => ({
+              ...event,
+              project: project.gitlabId
+                ? { id: `gid://gitlab/Project/${project.gitlabId}` }
+                : undefined,
+            }))
+          );
+        } catch (error: unknown) {
+          logger.warn('Failed to fetch events for project', {
+            projectPath: project.pathWithNamespace,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
         }
       }
+
       return allEvents;
     } catch (error: unknown) {
       logger.error('Error fetching events', { error: error instanceof Error ? error.message : 'Unknown error' });
@@ -32,14 +42,8 @@ export class GitlabEventProcessor {
   }
 
   async fetchEventData(ids: number[]): Promise<any> {
-    const gitlabIds = ids.map(id => `gid://gitlab/Event/${id}`);
-    try {
-      const result = await gitlabApiClient.executeQuery(GITLAB_EVENT_QUERIES.CORE_DATA, { ids: gitlabIds });
-      return { data: { events: result?.data?.events?.nodes || [] } };
-    } catch (error: unknown) {
-      logger.error('Error fetching event data', { error: error instanceof Error ? error.message : 'Unknown error' });
-      throw error;
-    }
+    logger.debug('Event sync uses REST list payloads as the source of truth', { eventIds: ids });
+    return { data: { events: [] } };
   }
 }
 

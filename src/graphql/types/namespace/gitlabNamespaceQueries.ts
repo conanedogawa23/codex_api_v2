@@ -12,6 +12,7 @@ export const GITLAB_NAMESPACE_QUERIES = {
         path
         fullName
         fullPath
+        webUrl
         description
         descriptionHtml
         visibility
@@ -58,7 +59,6 @@ export const GITLAB_NAMESPACE_QUERIES = {
             path
             fullPath
           }
-          count
         }
       }
     }

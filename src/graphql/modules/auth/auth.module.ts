@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { getPermissionsForAccessRole, normalizeAccessRole } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import { environment } from '../../../config/environment';
 import { emailService } from '../../../utils/emailService';
@@ -29,6 +30,8 @@ function toAuthUser(user: any) {
     avatar: user.avatar,
     department: user.department,
     role: user.role,
+    accessRole: normalizeAccessRole(user.accessRole),
+    permissions: getPermissionsForAccessRole(user.accessRole, user.isSuperAdmin === true),
     isSuperAdmin: user.isSuperAdmin === true,
   };
 }
@@ -50,6 +53,8 @@ export const authModule = createModule({
       avatar: String
       department: String!
       role: String!
+      accessRole: AccessRole!
+      permissions: [Permission!]!
       isSuperAdmin: Boolean!
     }
 

@@ -4,6 +4,7 @@ import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canMutateTasks } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import { getContextAccessibleProjectIds, requireProjectAccess } from '../../../utils/rbac';
 
@@ -44,6 +45,19 @@ const getTaskProjectAccess = async (context: GraphQLContext) => {
     },
   };
 };
+
+async function requireTaskMutationAccess(
+  context: GraphQLContext,
+  projectId: string | null | undefined
+) {
+  const currentUser = requireCurrentUser(context);
+  if (!canMutateTasks(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  await requireProjectAccess(context, projectId);
+  return currentUser;
+}
 
 export const taskModule = createModule({
   id: 'task',
@@ -743,11 +757,13 @@ export const taskModule = createModule({
     },
 
     Mutation: {
-      createTask: async (_: any, { input }: any) => {
+      createTask: async (_: any, { input }: any, context: GraphQLContext) => {
         // Validate projectId is provided
         if (!input.projectId) {
           throw new AppError('projectId is required for creating a task', 400);
         }
+
+        await requireTaskMutationAccess(context, input.projectId);
 
         // Convert GraphQL enum values to DB format
         const dbInput = { ...input };
@@ -775,11 +791,22 @@ export const taskModule = createModule({
         return task;
       },
 
-      updateTask: async (_: any, { id, input }: any) => {
+      updateTask: async (_: any, { id, input }: any, context: GraphQLContext) => {
+        const existingTask = await Task.findById(id).lean();
+        if (!existingTask) {
+          throw new AppError('Task not found', 404);
+        }
+
+        await requireTaskMutationAccess(context, existingTask.projectId);
+
         // Convert GraphQL enum values to DB format
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+
+        if (dbInput.projectId && dbInput.projectId !== existingTask.projectId) {
+          await requireTaskMutationAccess(context, dbInput.projectId);
+        }
         
         // Auto-update completionPercentage and completedAt based on status
         if (dbInput.status === 'completed') {
@@ -818,12 +845,15 @@ export const taskModule = createModule({
         return task;
       },
 
-      deleteTask: async (_: any, { id }: { id: string }) => {
-        const task = await Task.findByIdAndUpdate(
-          id,
-          { isActive: false },
-          { new: true }
-        );
+      deleteTask: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        const existingTask = await Task.findById(id).lean();
+        if (!existingTask) {
+          throw new AppError('Task not found', 404);
+        }
+
+        await requireTaskMutationAccess(context, existingTask.projectId);
+
+        const task = await Task.findByIdAndUpdate(id, { isActive: false }, { new: true });
         if (!task) {
           throw new AppError('Task not found', 404);
         }
@@ -831,7 +861,18 @@ export const taskModule = createModule({
         return true;
       },
 
-      completeTask: async (_: any, { id, actualHours }: { id: string; actualHours?: number }) => {
+      completeTask: async (
+        _: any,
+        { id, actualHours }: { id: string; actualHours?: number },
+        context: GraphQLContext
+      ) => {
+        const existingTask = await Task.findById(id).lean();
+        if (!existingTask) {
+          throw new AppError('Task not found', 404);
+        }
+
+        await requireTaskMutationAccess(context, existingTask.projectId);
+
         const updateData: any = {
           status: 'completed',
           completedAt: new Date(),
@@ -854,9 +895,17 @@ export const taskModule = createModule({
 
       addTaskToSprint: async (
         _: any,
-        { taskId, sprintId, sprintOrder }: { taskId: string; sprintId: string; sprintOrder?: number }
+        { taskId, sprintId, sprintOrder }: { taskId: string; sprintId: string; sprintOrder?: number },
+        context: GraphQLContext
       ) => {
         try {
+          const existingTask = await Task.findById(taskId).lean();
+          if (!existingTask) {
+            throw new AppError('Task not found', 404);
+          }
+
+          await requireTaskMutationAccess(context, existingTask.projectId);
+
           const updateData: any = { sprintId };
           if (sprintOrder !== undefined) {
             updateData.sprintOrder = sprintOrder;
@@ -880,8 +929,19 @@ export const taskModule = createModule({
         }
       },
 
-      removeTaskFromSprint: async (_: any, { taskId }: { taskId: string }) => {
+      removeTaskFromSprint: async (
+        _: any,
+        { taskId }: { taskId: string },
+        context: GraphQLContext
+      ) => {
         try {
+          const existingTask = await Task.findById(taskId).lean();
+          if (!existingTask) {
+            throw new AppError('Task not found', 404);
+          }
+
+          await requireTaskMutationAccess(context, existingTask.projectId);
+
           const task = await Task.findByIdAndUpdate(
             taskId,
             { $unset: { sprintId: '', sprintOrder: '' } },
@@ -902,9 +962,17 @@ export const taskModule = createModule({
 
       updateTaskSprintOrder: async (
         _: any,
-        { taskId, sprintOrder }: { taskId: string; sprintOrder: number }
+        { taskId, sprintOrder }: { taskId: string; sprintOrder: number },
+        context: GraphQLContext
       ) => {
         try {
+          const existingTask = await Task.findById(taskId).lean();
+          if (!existingTask) {
+            throw new AppError('Task not found', 404);
+          }
+
+          await requireTaskMutationAccess(context, existingTask.projectId);
+
           const task = await Task.findByIdAndUpdate(
             taskId,
             { $set: { sprintOrder } },
@@ -925,9 +993,17 @@ export const taskModule = createModule({
 
       updateTaskStoryPoints: async (
         _: any,
-        { taskId, storyPoints }: { taskId: string; storyPoints: number }
+        { taskId, storyPoints }: { taskId: string; storyPoints: number },
+        context: GraphQLContext
       ) => {
         try {
+          const existingTask = await Task.findById(taskId).lean();
+          if (!existingTask) {
+            throw new AppError('Task not found', 404);
+          }
+
+          await requireTaskMutationAccess(context, existingTask.projectId);
+
           const task = await Task.findByIdAndUpdate(
             taskId,
             { $set: { storyPoints } },
@@ -948,13 +1024,16 @@ export const taskModule = createModule({
 
       addTaskAttachment: async (
         _: any,
-        { taskId, attachment }: { taskId: string; attachment: any }
+        { taskId, attachment }: { taskId: string; attachment: any },
+        context: GraphQLContext
       ) => {
         try {
           const task = await Task.findById(taskId);
           if (!task) {
             throw new AppError('Task not found', 404);
           }
+
+          await requireTaskMutationAccess(context, task.projectId);
 
           // Validate file size (5MB limit for base64)
           const maxSize = 5 * 1024 * 1024; // 5MB in bytes
@@ -980,13 +1059,16 @@ export const taskModule = createModule({
 
       removeTaskAttachment: async (
         _: any,
-        { taskId, attachmentName }: { taskId: string; attachmentName: string }
+        { taskId, attachmentName }: { taskId: string; attachmentName: string },
+        context: GraphQLContext
       ) => {
         try {
           const task = await Task.findById(taskId);
           if (!task) {
             throw new AppError('Task not found', 404);
           }
+
+          await requireTaskMutationAccess(context, task.projectId);
 
           await task.removeAttachment(attachmentName);
 

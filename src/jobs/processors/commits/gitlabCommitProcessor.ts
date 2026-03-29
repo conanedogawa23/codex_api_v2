@@ -1,34 +1,75 @@
 import { logger } from '../../../utils/logger';
-import { gitlabApiClient } from '../../../utils/gitlabApiClient';
-import { GITLAB_COMMIT_QUERIES } from '../../../graphql/types/commit/gitlabCommitQueries';
+import { Project } from '../../../models/Project';
+import { gitlabApi } from '../../../utils/gitlabApi';
 
 export class GitlabCommitProcessor {
-  async fetchSimpleCommits(batchSize: number = 100, projectPath?: string): Promise<any[]> {
+  private async resolveProjectGitlabId(projectPath: string): Promise<number | undefined> {
+    const existingProject = await Project.findOne({ pathWithNamespace: projectPath })
+      .select('gitlabId')
+      .lean();
+
+    if (existingProject?.gitlabId) {
+      return existingProject.gitlabId;
+    }
+
+    try {
+      const gitlabProject = await gitlabApi.getProject(projectPath);
+      return gitlabProject.id;
+    } catch (error: unknown) {
+      logger.warn('Unable to resolve project GitLab ID for commit sync', {
+        projectPath,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return undefined;
+    }
+  }
+
+  async fetchSimpleCommits(
+    batchSize: number = 100,
+    projectPath?: string,
+    projectGitlabId?: number
+  ): Promise<any[]> {
     if (!projectPath) {
       logger.warn('Project path required for commit sync');
       return [];
     }
 
-    logger.info('Fetching simple commits from GitLab', { projectPath });
+    logger.info('Fetching simple commits from GitLab', { projectPath, batchSize });
 
     try {
-      const result = await gitlabApiClient.executeQuery(GITLAB_COMMIT_QUERIES.SIMPLE_LIST, {
-        first: batchSize,
-        after: null,
-        projectPath
-      });
+      const resolvedProjectGitlabId = projectGitlabId ?? await this.resolveProjectGitlabId(projectPath);
+      const perPage = Math.max(1, Math.min(batchSize, 100));
+      const allCommits: any[] = [];
+      let page = 1;
 
-      const lastCommit = (result as any)?.data?.project?.repository?.tree?.lastCommit;
-      if (lastCommit) {
-        // Add projectPath for later use
-        return [{
-          ...lastCommit,
-          projectPath
-        }];
+      while (true) {
+        const commits = await gitlabApi.listProjectCommits(projectPath, page, perPage);
+        if (commits.length === 0) {
+          break;
+        }
+
+        allCommits.push(
+          ...commits.map((commit) => ({
+            ...commit,
+            sha: commit.id,
+            shortId: commit.short_id,
+            projectPath,
+            projectId: resolvedProjectGitlabId ? String(resolvedProjectGitlabId) : undefined,
+          }))
+        );
+
+        if (commits.length < perPage) {
+          break;
+        }
+
+        page += 1;
       }
 
-      logger.info('No commits found', { projectPath });
-      return [];
+      if (allCommits.length === 0) {
+        logger.info('No commits found', { projectPath });
+      }
+
+      return allCommits;
     } catch (error: unknown) {
       logger.error('Error fetching simple commits from GitLab', {
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -39,63 +80,12 @@ export class GitlabCommitProcessor {
   }
 
   async fetchCommitData(ids: number[], projectPath?: string, sha?: string): Promise<any> {
-    if (!projectPath || !sha) {
-      logger.error('fetchCommitData requires both projectPath and sha parameters');
-      return { data: { commits: [] } };
-    }
-
-    logger.debug('Fetching comprehensive commit data', { projectPath, sha });
-
-    try {
-      const results = await Promise.allSettled([
-        gitlabApiClient.executeQuery(GITLAB_COMMIT_QUERIES.CORE_DATA, { projectPath, sha }),
-        gitlabApiClient.executeQuery(GITLAB_COMMIT_QUERIES.DIFF_STATS, { projectPath, sha }),
-        gitlabApiClient.executeQuery(GITLAB_COMMIT_QUERIES.REFERENCES, { projectPath, sha }),
-        gitlabApiClient.executeQuery(GITLAB_COMMIT_QUERIES.SIGNATURES, { projectPath, sha })
-      ]);
-
-      const [core, diffStats, references, signatures] = results.map((r, index) => {
-        if (r.status === 'rejected') {
-          logger.error(`Failed to fetch commit category ${index}`, {
-            error: r.reason instanceof Error ? r.reason.message : 'Unknown error',
-            projectPath,
-            sha
-          });
-          return null;
-        }
-        return r.value;
-      });
-
-      // Extract single commit from each category
-      const coreCommit = core?.data?.project?.repository?.commit || null;
-      const statsData = diffStats?.data?.project?.repository?.commit || null;
-      const refsData = references?.data?.project?.repository?.commit || null;
-      const sigData = signatures?.data?.project?.repository?.commit || null;
-
-      if (!coreCommit) {
-        logger.warn('No core commit data available', { projectPath, sha });
-        return { data: { commits: [] } };
-      }
-
-      // Merge all data
-      const merged = {
-        ...coreCommit,
-        stats: statsData?.stats || null,
-        pipelines: refsData?.pipelines || { nodes: [] },
-        signature: sigData?.signature || null
-      };
-
-      logger.debug('Successfully merged commit data', { projectPath, sha });
-
-      return { data: { commits: [merged] } };
-    } catch (error: unknown) {
-      logger.error('Error fetching commit data', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        projectPath,
-        sha
-      });
-      throw error;
-    }
+    logger.debug('Commit sync uses REST list payloads as the source of truth', {
+      idsCount: ids.length,
+      projectPath,
+      sha,
+    });
+    return { data: { commits: [] } };
   }
 }
 

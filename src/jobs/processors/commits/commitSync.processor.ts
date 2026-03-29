@@ -4,14 +4,15 @@ import { Commit, ICommit } from '../../../models/Commit';
 import { logger } from '../../../utils/logger';
 import { gitlabCommitProcessor } from './gitlabCommitProcessor';
 import moment from 'moment-timezone';
+import { fetchAcrossActiveProjects, ProjectScopedSyncOptions } from '../shared/projectSyncTargets';
 
-export interface CommitSyncJobData extends SyncOptions {
+export interface CommitSyncJobData extends ProjectScopedSyncOptions {
   projectPath?: string;
 }
 
 class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
   readonly entityName = 'commit';
-  readonly categories = ['coreData', 'diffStats', 'references', 'signatures'];
+  readonly categories = ['coreData', 'diffStats'];
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const projectPath = (options as CommitSyncJobData).projectPath;
@@ -20,32 +21,22 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
       return await gitlabCommitProcessor.fetchSimpleCommits(options.batchSize || 100, projectPath);
     }
 
-    // No projectPath - fetch commits from all active projects
     logger.info('Fetching commits from all active projects');
-    const Project = require('../../../models/Project').Project;
-    const projects = await Project.find({ isActive: true })
-      .select('pathWithNamespace')
-      .lean();
+    const allCommits = await fetchAcrossActiveProjects(
+      'commits',
+      options as CommitSyncJobData,
+      async (project) => gitlabCommitProcessor.fetchSimpleCommits(
+        options.batchSize || 100,
+        project.pathWithNamespace,
+        project.gitlabId
+      )
+    );
 
-    logger.info('Found active projects for commit sync', { count: projects.length });
-
-    const allCommits: any[] = [];
-    for (const project of projects) {
-      try {
-        const commits = await gitlabCommitProcessor.fetchSimpleCommits(
-          options.batchSize || 100,
-          project.pathWithNamespace
-        );
-        allCommits.push(...commits);
-      } catch (error) {
-        logger.warn('Failed to fetch commits for project', {
-          projectPath: project.pathWithNamespace,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    }
-
-    logger.info('Fetched commits from all projects', { totalCommits: allCommits.length });
+    logger.info('Fetched commits from all projects', {
+      totalCommits: allCommits.length,
+      projectOffset: (options as CommitSyncJobData).projectOffset || 0,
+      projectLimit: (options as CommitSyncJobData).projectLimit || 'all'
+    });
     return allCommits;
   }
 
@@ -60,63 +51,50 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
     entity: any,
     categorySyncResults: { [category: string]: import('../base/baseSyncProcessor').CategorySyncResult }
   ): Promise<{ created: boolean; updated: boolean; skipped: boolean }> {
-    const gitlabId = this.extractGitLabId(entity);
     const projectPath = entity.projectPath;
     const sha = entity.sha;
+    const projectId = String(entity.projectId || '');
 
-    if (!projectPath || !sha) {
-      logger.error('Commit entity missing projectPath or sha', { gitlabId });
+    if (!projectPath || !sha || !projectId) {
+      logger.error('Commit entity missing projectPath, projectId, or sha', {
+        projectPath,
+        projectId,
+        sha,
+      });
       return { created: false, updated: false, skipped: true };
     }
 
-    const existingEntity = await this.getExisting(gitlabId);
+    const existingEntity = await Commit.findOne({ sha, projectId }).lean();
 
     if (existingEntity) {
       if (this.shouldSkipSync(existingEntity)) {
         logger.debug(`Skipping ${this.entityName} sync`, {
-          entityId: gitlabId,
+          entityId: sha,
           reason: 'Manual or non-syncable entity'
         });
         return { created: false, updated: false, skipped: true };
       }
-
-      const detailedData = await this.fetchEntityData([gitlabId], projectPath, sha);
-
-      if (!detailedData || !detailedData.data) {
-        logger.warn(`No detailed data found for ${this.entityName}`, { gitlabId, projectPath, sha });
-        return { created: false, updated: false, skipped: true };
-      }
-
-      const mappedData = this.mapToModel(detailedData.data);
-      this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
-      const savedEntity = await this.updateModel(mappedData);
-
-      if (savedEntity) {
-        logger.debug(`Updated ${this.entityName}`, { gitlabId, projectPath, sha });
-        return { created: false, updated: true, skipped: false };
-      }
-
-      logger.warn(`Failed to update ${this.entityName}`, { gitlabId, projectPath, sha });
-      return { created: false, updated: false, skipped: true };
     }
 
-    const detailedData = await this.fetchEntityData([gitlabId], projectPath, sha);
-
-    if (!detailedData || !detailedData.data) {
-      logger.warn(`No detailed data found for new ${this.entityName}`, { gitlabId, projectPath, sha });
-      return { created: false, updated: false, skipped: true };
-    }
-
-    const mappedData = this.mapToModel(detailedData.data);
-    this.updateCategoryTimestamps(mappedData, detailedData.data, categorySyncResults);
+    const wrappedData = { commits: [entity] };
+    const mappedData = this.mapToModel(wrappedData);
+    this.updateCategoryTimestamps(mappedData, wrappedData, categorySyncResults);
     const savedEntity = await this.updateModel(mappedData);
 
     if (savedEntity) {
-      logger.debug(`Created ${this.entityName}`, { gitlabId, projectPath, sha });
-      return { created: true, updated: false, skipped: false };
+      logger.debug(`${existingEntity ? 'Updated' : 'Created'} ${this.entityName}`, {
+        projectId,
+        projectPath,
+        sha,
+      });
+      return {
+        created: !existingEntity,
+        updated: !!existingEntity,
+        skipped: false,
+      };
     }
 
-    logger.warn(`Failed to create ${this.entityName}`, { gitlabId, projectPath, sha });
+    logger.warn(`Failed to save ${this.entityName}`, { projectId, projectPath, sha });
     return { created: false, updated: false, skipped: true };
   }
 
@@ -130,21 +108,34 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
 
     const commit = gitlabData.commits[0];
     return {
-      gitlabId: this.extractGitLabId(commit),
-      sha: commit.sha || '',
-      projectId: commit.project?.id ? String(this.extractGitLabId(commit.project)) : '',
-      shortId: commit.shortId || '',
+      sha: commit.sha || commit.id || '',
+      projectId: commit.projectId
+        ? String(commit.projectId)
+        : commit.project?.id
+          ? String(this.extractGitLabId(commit.project))
+          : '',
+      shortId: commit.shortId || commit.short_id || '',
       title: commit.title || '',
       message: commit.message || '',
-      authorName: commit.authorName || '',
-      authorEmail: commit.authorEmail || '',
-      authoredDate: commit.authoredDate ? new Date(commit.authoredDate) : syncTime,
-      committerName: commit.committerName || '',
-      committerEmail: commit.committerEmail || '',
-      committedDate: commit.committedDate ? new Date(commit.committedDate) : syncTime,
-      webUrl: commit.webUrl || '',
-      parentIds: commit.parentIds || [],
-      createdAt: syncTime,
+      authorName: commit.authorName || commit.author_name || commit.author?.name || '',
+      authorEmail: commit.authorEmail || commit.author_email || '',
+      authoredDate: commit.authoredDate || commit.authored_date
+        ? new Date(commit.authoredDate || commit.authored_date)
+        : syncTime,
+      committerName: commit.committerName || commit.committer_name || commit.committer?.name || '',
+      committerEmail: commit.committerEmail || commit.committer_email || '',
+      committedDate: commit.committedDate || commit.committed_date
+        ? new Date(commit.committedDate || commit.committed_date)
+        : syncTime,
+      webUrl: commit.webUrl || commit.web_url || '',
+      parentIds: commit.parentIds || commit.parent_ids || [],
+      stats: commit.stats
+        ? {
+            additions: commit.stats.additions || 0,
+            deletions: commit.stats.deletions || 0,
+            total: commit.stats.total || 0,
+          }
+        : undefined,
       lastSyncedAt: syncTime,
       isDeleted: false,
       syncTimestamps: {}
@@ -153,14 +144,18 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
 
   async updateModel(data: Partial<ICommit>): Promise<ICommit | null> {
     try {
-      if (!data.gitlabId) return null;
+      if (!data.sha || !data.projectId) return null;
       return await Commit.findOneAndUpdate(
-        { gitlabId: data.gitlabId },
+        { sha: data.sha, projectId: data.projectId },
         { $set: data },
         { new: true, upsert: true, runValidators: true }
       );
     } catch (error: unknown) {
-      logger.error('Error updating commit', { gitlabId: data.gitlabId, error: error instanceof Error ? error.message : 'Unknown error' });
+      logger.error('Error updating commit', {
+        sha: data.sha,
+        projectId: data.projectId,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
       return null;
     }
   }
@@ -168,7 +163,14 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
   protected isCategoryDataAvailable(gitlabData: any, category: string): boolean {
     if (!gitlabData || !gitlabData.commits || gitlabData.commits.length === 0) return false;
     const commit = gitlabData.commits[0];
-    return !!(commit && commit.id);
+    switch (category) {
+      case 'coreData':
+        return !!(commit && (commit.sha || commit.id) && (commit.projectId || commit.project?.id));
+      case 'diffStats':
+        return !!commit?.stats;
+      default:
+        return false;
+    }
   }
 }
 

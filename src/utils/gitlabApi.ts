@@ -26,6 +26,76 @@ interface GitLabProjectResponse {
   last_activity_at: string;
 }
 
+interface GitLabProjectEventResponse {
+  id: number;
+  project_id: number;
+  action_name: string;
+  target_id: number | null;
+  target_iid: number | null;
+  target_type: string | null;
+  author_id: number | null;
+  target_title: string | null;
+  created_at: string;
+  author?: {
+    id: number;
+    username: string;
+    name: string;
+    avatar_url?: string;
+    web_url?: string;
+  };
+  push_data?: {
+    commit_count: number;
+    action: string;
+    ref_type: string;
+    commit_from?: string;
+    commit_to?: string;
+    ref?: string;
+    commit_title?: string;
+  };
+}
+
+interface GitLabCommitResponse {
+  id: string;
+  short_id: string;
+  title: string;
+  author_name: string;
+  author_email: string;
+  authored_date: string;
+  committer_name: string;
+  committer_email: string;
+  committed_date: string;
+  created_at: string;
+  message: string;
+  web_url: string;
+  parent_ids: string[];
+  stats?: {
+    additions: number;
+    deletions: number;
+    total: number;
+  };
+}
+
+interface GitLabPipelineResponse {
+  id: number;
+  iid: number;
+  project_id: number;
+  sha: string;
+  ref: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  web_url: string;
+  before_sha?: string;
+  tag?: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  committed_at?: string | null;
+  duration?: number | null;
+  queued_duration?: number | null;
+  coverage?: number | null;
+}
+
 interface CreateProjectInput {
   name: string;
   description?: string;
@@ -149,11 +219,13 @@ class GitLabApiService {
    * @param projectId GitLab project ID
    * @returns Project data from GitLab
    */
-  async getProject(projectId: number): Promise<GitLabProjectResponse> {
+  async getProject(projectRef: number | string): Promise<GitLabProjectResponse> {
     try {
-      logger.debug('Fetching project from GitLab', { projectId });
+      logger.debug('Fetching project from GitLab', { projectRef });
 
-      const response = await this.client.get<GitLabProjectResponse>(`/projects/${projectId}`);
+      const encodedProjectRef =
+        typeof projectRef === 'string' ? encodeURIComponent(projectRef) : projectRef;
+      const response = await this.client.get<GitLabProjectResponse>(`/projects/${encodedProjectRef}`);
 
       return response.data;
     } catch (error) {
@@ -162,9 +234,145 @@ class GitLabApiService {
         logger.error('Failed to fetch project from GitLab', {
           error: message,
           status: error.response?.status,
-          projectId,
+          projectRef,
         });
         throw new AppError(`GitLab project fetch failed: ${message}`, error.response?.status || 500);
+      }
+      throw error;
+    }
+  }
+
+  async listProjectCommits(
+    projectPath: string,
+    page: number = 1,
+    perPage: number = 100
+  ): Promise<GitLabCommitResponse[]> {
+    try {
+      logger.debug('Fetching project commits from GitLab', {
+        projectPath,
+        page,
+        perPage,
+      });
+
+      const response = await this.client.get<GitLabCommitResponse[]>(
+        `/projects/${encodeURIComponent(projectPath)}/repository/commits`,
+        {
+          params: {
+            page,
+            per_page: perPage,
+            all: true,
+            with_stats: true,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message = error.response?.data?.message || error.message;
+        logger.error('Failed to fetch project commits from GitLab', {
+          error: message,
+          status: error.response?.status,
+          projectPath,
+          page,
+          perPage,
+        });
+        throw new AppError(`GitLab project commits fetch failed: ${message}`, error.response?.status || 500);
+      }
+      throw error;
+    }
+  }
+
+  async listProjectPipelines(
+    projectPath: string,
+    page: number = 1,
+    perPage: number = 100
+  ): Promise<GitLabPipelineResponse[]> {
+    try {
+      logger.debug('Fetching project pipelines from GitLab', {
+        projectPath,
+        page,
+        perPage,
+      });
+
+      const response = await this.client.get<GitLabPipelineResponse[]>(
+        `/projects/${encodeURIComponent(projectPath)}/pipelines`,
+        {
+          params: {
+            page,
+            per_page: perPage,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message = error.response?.data?.message || error.message;
+        logger.error('Failed to fetch project pipelines from GitLab', {
+          error: message,
+          status: error.response?.status,
+          projectPath,
+          page,
+          perPage,
+        });
+        throw new AppError(`GitLab project pipelines fetch failed: ${message}`, error.response?.status || 500);
+      }
+      throw error;
+    }
+  }
+
+  async getProjectPipeline(projectPath: string, pipelineId: number): Promise<GitLabPipelineResponse> {
+    try {
+      logger.debug('Fetching project pipeline from GitLab', { projectPath, pipelineId });
+
+      const response = await this.client.get<GitLabPipelineResponse>(
+        `/projects/${encodeURIComponent(projectPath)}/pipelines/${pipelineId}`
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message = error.response?.data?.message || error.message;
+        logger.error('Failed to fetch project pipeline from GitLab', {
+          error: message,
+          status: error.response?.status,
+          projectPath,
+          pipelineId,
+        });
+        throw new AppError(`GitLab project pipeline fetch failed: ${message}`, error.response?.status || 500);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get recent project events from GitLab by project path.
+   * Uses the REST endpoint because GitLab GraphQL does not expose a global event feed.
+   */
+  async getProjectEvents(projectPath: string, perPage: number = 100): Promise<GitLabProjectEventResponse[]> {
+    try {
+      logger.debug('Fetching project events from GitLab', { projectPath, perPage });
+
+      const response = await this.client.get<GitLabProjectEventResponse[]>(
+        `/projects/${encodeURIComponent(projectPath)}/events`,
+        {
+          params: {
+            per_page: perPage,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message = error.response?.data?.message || error.message;
+        logger.error('Failed to fetch project events from GitLab', {
+          error: message,
+          status: error.response?.status,
+          projectPath,
+        });
+        throw new AppError(`GitLab project events fetch failed: ${message}`, error.response?.status || 500);
       }
       throw error;
     }
@@ -227,5 +435,11 @@ class GitLabApiService {
 export const gitlabApi = new GitLabApiService();
 
 // Export types
-export type { GitLabProjectResponse, CreateProjectInput };
+export type {
+  GitLabProjectResponse,
+  GitLabProjectEventResponse,
+  GitLabCommitResponse,
+  GitLabPipelineResponse,
+  CreateProjectInput,
+};
 

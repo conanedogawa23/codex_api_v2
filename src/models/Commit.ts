@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ICommit extends Document {
-  gitlabId: number;
+  gitlabId?: number;
   sha: string;
   projectId: string;
   shortId: string;
@@ -37,8 +37,6 @@ export interface ICommit extends Document {
 const CommitSchema: Schema = new Schema({
   gitlabId: {
     type: Number,
-    required: true,
-    unique: true,
     index: true
   },
   sha: {

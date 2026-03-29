@@ -3,8 +3,13 @@ import mongoose from 'mongoose';
 
 import { jobManager } from '../../../jobs';
 import {
+  commitSyncQueue,
+  eventSyncQueue,
   issueSyncQueue,
+  iterationSyncQueue,
+  labelSyncQueue,
   mergeRequestSyncQueue,
+  milestoneSyncQueue,
   namespaceSyncQueue,
   pipelineSyncQueue,
   projectSyncQueue,
@@ -18,10 +23,26 @@ import { Pipeline } from '../../../models/Pipeline';
 import { Project } from '../../../models/Project';
 import { User } from '../../../models/User';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import {
+  canManageAccessRoles,
+  getPermissionsForAccessRole,
+  normalizeAccessRole,
+} from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import { extractGitlabIdFromGid } from '../../../utils/rbac';
 
-type SyncTypeValue = 'USER' | 'PROJECT' | 'ISSUE' | 'MERGE_REQUEST' | 'NAMESPACE' | 'PIPELINE';
+type SyncTypeValue =
+  | 'USER'
+  | 'PROJECT'
+  | 'ISSUE'
+  | 'MERGE_REQUEST'
+  | 'NAMESPACE'
+  | 'PIPELINE'
+  | 'COMMIT'
+  | 'LABEL'
+  | 'MILESTONE'
+  | 'ITERATION'
+  | 'EVENT';
 
 const syncQueueMap: Record<SyncTypeValue, any> = {
   USER: userSyncQueue,
@@ -30,6 +51,11 @@ const syncQueueMap: Record<SyncTypeValue, any> = {
   MERGE_REQUEST: mergeRequestSyncQueue,
   NAMESPACE: namespaceSyncQueue,
   PIPELINE: pipelineSyncQueue,
+  COMMIT: commitSyncQueue,
+  LABEL: labelSyncQueue,
+  MILESTONE: milestoneSyncQueue,
+  ITERATION: iterationSyncQueue,
+  EVENT: eventSyncQueue,
 };
 
 function requireSuperAdmin(context: GraphQLContext) {
@@ -62,6 +88,8 @@ function toUserAccessRecord(user: any) {
     username: user.username,
     department: user.department,
     role: user.role,
+    accessRole: normalizeAccessRole(user.accessRole),
+    permissions: getPermissionsForAccessRole(user.accessRole, user.isSuperAdmin === true),
     isActive: user.isActive === true,
     isSuperAdmin: user.isSuperAdmin === true,
     projects: normalizeProjectAssignments(user.projects),
@@ -168,6 +196,21 @@ async function triggerSyncByType(syncType: SyncTypeValue): Promise<void> {
     case 'PIPELINE':
       await jobManager.triggerPipelineSync();
       return;
+    case 'COMMIT':
+      await jobManager.triggerCommitSync();
+      return;
+    case 'LABEL':
+      await jobManager.triggerLabelSync();
+      return;
+    case 'MILESTONE':
+      await jobManager.triggerMilestoneSync();
+      return;
+    case 'ITERATION':
+      await jobManager.triggerIterationSync();
+      return;
+    case 'EVENT':
+      await jobManager.triggerEventSync();
+      return;
   }
 }
 
@@ -190,6 +233,21 @@ async function pauseSyncByType(syncType: SyncTypeValue): Promise<void> {
       return;
     case 'PIPELINE':
       await pipelineSyncQueue.pause();
+      return;
+    case 'COMMIT':
+      await commitSyncQueue.pause();
+      return;
+    case 'LABEL':
+      await labelSyncQueue.pause();
+      return;
+    case 'MILESTONE':
+      await milestoneSyncQueue.pause();
+      return;
+    case 'ITERATION':
+      await iterationSyncQueue.pause();
+      return;
+    case 'EVENT':
+      await eventSyncQueue.pause();
       return;
   }
 }
@@ -214,6 +272,21 @@ async function resumeSyncByType(syncType: SyncTypeValue): Promise<void> {
     case 'PIPELINE':
       await pipelineSyncQueue.resume();
       return;
+    case 'COMMIT':
+      await commitSyncQueue.resume();
+      return;
+    case 'LABEL':
+      await labelSyncQueue.resume();
+      return;
+    case 'MILESTONE':
+      await milestoneSyncQueue.resume();
+      return;
+    case 'ITERATION':
+      await iterationSyncQueue.resume();
+      return;
+    case 'EVENT':
+      await eventSyncQueue.resume();
+      return;
   }
 }
 
@@ -227,6 +300,11 @@ export const superAdminModule = createModule({
       MERGE_REQUEST
       NAMESPACE
       PIPELINE
+      COMMIT
+      LABEL
+      MILESTONE
+      ITERATION
+      EVENT
     }
 
     type SystemOverview {
@@ -263,6 +341,8 @@ export const superAdminModule = createModule({
       username: String!
       department: String!
       role: String!
+      accessRole: AccessRole!
+      permissions: [Permission!]!
       isActive: Boolean!
       isSuperAdmin: Boolean!
       projects: [UserAccessProject!]!
@@ -292,6 +372,7 @@ export const superAdminModule = createModule({
         search: String
         department: String
         role: String
+        accessRole: AccessRole
       ): UserAccessResult!
       auditLog(limit: Int = 50, offset: Int = 0): AuditLogResult!
     }
@@ -299,6 +380,7 @@ export const superAdminModule = createModule({
     extend type Mutation {
       assignUserToProjects(userId: ID!, projectIds: [ID!]!): UserAccessRecord!
       removeUserFromProjects(userId: ID!, projectIds: [ID!]!): UserAccessRecord!
+      setUserAccessRole(userId: ID!, accessRole: AccessRole!): UserAccessRecord!
       setSuperAdmin(userId: ID!, isSuperAdmin: Boolean!): UserAccessRecord!
       triggerSync(syncType: SyncType!): SyncMutationResult!
       pauseSync(syncType: SyncType!): SyncMutationResult!
@@ -353,7 +435,15 @@ export const superAdminModule = createModule({
           search,
           department,
           role,
-        }: { limit?: number; offset?: number; search?: string; department?: string; role?: string },
+          accessRole,
+        }: {
+          limit?: number;
+          offset?: number;
+          search?: string;
+          department?: string;
+          role?: string;
+          accessRole?: string;
+        },
         context: GraphQLContext
       ) => {
         requireSuperAdmin(context);
@@ -364,6 +454,9 @@ export const superAdminModule = createModule({
         }
         if (role?.trim()) {
           query.role = role.trim();
+        }
+        if (accessRole?.trim()) {
+          query.accessRole = normalizeAccessRole(accessRole);
         }
         if (search?.trim()) {
           const searchRegex = new RegExp(escapeRegex(search.trim()), 'i');
@@ -379,7 +472,7 @@ export const superAdminModule = createModule({
 
         const [users, totalCount] = await Promise.all([
           User.find(query)
-            .select('name email username department role isActive isSuperAdmin projects')
+            .select('name email username department role accessRole isActive isSuperAdmin projects')
             .sort({ name: 1 })
             .skip(normalizedOffset)
             .limit(normalizedLimit)
@@ -460,7 +553,7 @@ export const superAdminModule = createModule({
         });
 
         const updatedUser = await User.findById(userId)
-          .select('name email username department role isActive isSuperAdmin projects')
+          .select('name email username department role accessRole isActive isSuperAdmin projects')
           .lean();
 
         if (!updatedUser) {
@@ -508,7 +601,7 @@ export const superAdminModule = createModule({
         });
 
         const updatedUser = await User.findById(userId)
-          .select('name email username department role isActive isSuperAdmin projects')
+          .select('name email username department role accessRole isActive isSuperAdmin projects')
           .lean();
 
         if (!updatedUser) {
@@ -516,6 +609,32 @@ export const superAdminModule = createModule({
         }
 
         return toUserAccessRecord(updatedUser);
+      },
+      setUserAccessRole: async (
+        _: unknown,
+        { userId, accessRole }: { userId: string; accessRole: string },
+        context: GraphQLContext
+      ) => {
+        const currentUser = requireSuperAdmin(context);
+        if (!canManageAccessRoles(currentUser.accessRole, currentUser.isSuperAdmin)) {
+          throw new AppError('Forbidden', 403);
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+          throw new AppError('User not found', 404);
+        }
+
+        user.accessRole = normalizeAccessRole(accessRole);
+        await user.save();
+
+        logger.info('Updated RBAC access role', {
+          actingUserId: currentUser.userId,
+          targetUserId: userId,
+          accessRole: user.accessRole,
+        });
+
+        return toUserAccessRecord(user.toObject());
       },
       setSuperAdmin: async (
         _: unknown,

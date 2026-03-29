@@ -4,8 +4,9 @@ import { MergeRequest, IMergeRequest } from '../../../models/MergeRequest';
 import { logger } from '../../../utils/logger';
 import { gitlabMergeRequestProcessor } from './gitlabMergeRequestProcessor';
 import moment from 'moment-timezone';
+import { fetchAcrossActiveProjects, ProjectScopedSyncOptions } from '../shared/projectSyncTargets';
 
-export interface MergeRequestSyncJobData extends SyncOptions {
+export interface MergeRequestSyncJobData extends ProjectScopedSyncOptions {
   projectPath?: string;
   mrIds?: number[];
 }
@@ -14,13 +15,7 @@ class MergeRequestSyncProcessor extends BaseSyncProcessor<IMergeRequest> {
   readonly entityName = 'mergeRequest';
   readonly categories = [
     'coreData',
-    'reviewersAssignees',
-    'approvals',
-    'pipelines',
-    'diffStats',
-    'discussions',
-    'commits',
-    'changes'
+    'reviewersAssignees'
   ];
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
@@ -45,37 +40,24 @@ class MergeRequestSyncProcessor extends BaseSyncProcessor<IMergeRequest> {
           projectPath
         });
       } else {
-        // Fetch all active projects from database and sync each one
-        const { Project } = await import('../../../models/Project');
-        const projects = await Project.find({ isActive: true })
-          .select('pathWithNamespace gitlabId name')
-          .limit(50) // Limit to first 50 projects to avoid timeout
-          .lean();
-
-        logger.info(`Fetching merge requests from ${projects.length} projects`);
-
-        for (const project of projects) {
-          try {
+        allMergeRequests = await fetchAcrossActiveProjects(
+          'merge requests',
+          options as MergeRequestSyncJobData,
+          async (project) => {
             const projectMRs = await gitlabMergeRequestProcessor.fetchSimpleMergeRequests(
               batchSize,
               project.pathWithNamespace
             );
-            
-            allMergeRequests.push(...projectMRs);
-            
+
             logger.debug(`Fetched ${projectMRs.length} MRs from project: ${project.pathWithNamespace}`);
-          } catch (error: unknown) {
-            // Log error but continue with other projects
-            logger.warn(`Failed to fetch MRs for project ${project.pathWithNamespace}`, {
-              error: error instanceof Error ? error.message : 'Unknown error',
-              projectId: project.gitlabId
-            });
+            return projectMRs;
           }
-        }
+        );
 
         logger.info('Successfully fetched merge requests from all projects', {
           totalMRs: allMergeRequests.length,
-          projectsProcessed: projects.length
+          projectOffset: (options as MergeRequestSyncJobData).projectOffset || 0,
+          projectLimit: (options as MergeRequestSyncJobData).projectLimit || 'all'
         });
       }
       

@@ -107,12 +107,6 @@ export const GITLAB_MERGE_REQUEST_QUERIES = {
             state
           }
         }
-        mergedBy {
-          id
-          username
-          name
-          avatarUrl
-        }
       }
     }
   `,

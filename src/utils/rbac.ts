@@ -1,7 +1,19 @@
+import mongoose from 'mongoose';
+
 import { AppError } from '../middleware';
+import { Department } from '../models/Department';
 import { Project } from '../models/Project';
 import { ProjectSprintRepoMapping } from '../models/ProjectSprintRepoMapping';
 import { User } from '../models/User';
+import {
+  ACCESS_ROLE,
+  type AccessRole,
+  type Permission,
+  getPermissionsForAccessRole,
+  getProjectAccessScope,
+  hasPermission,
+  normalizeAccessRole,
+} from './accessControl';
 import { AuthenticatedUser, GraphQLContext, requireCurrentUser } from './auth';
 import { logger } from './logger';
 
@@ -11,6 +23,12 @@ type ProjectAccessMode = 'mongo' | 'gitlab';
 interface ProjectIdentifierDocument {
   _id: { toString(): string };
   gitlabId?: number | null;
+  department?: string | null;
+}
+
+interface ProjectIdentifiers {
+  projectIds: string[];
+  projectGitlabIds: number[];
 }
 
 export interface AccessibleProjectsResult {
@@ -23,6 +41,8 @@ export interface ContextAccessibleProjectsResult {
   isSuperAdmin: boolean;
   projectIds: string[];
   projectGitlabIds: number[];
+  accessRole: AccessRole;
+  permissions: Permission[];
 }
 
 export interface ContextAccessibleSprintReposResult {
@@ -30,20 +50,50 @@ export interface ContextAccessibleSprintReposResult {
   sprintRepoIds: string[];
 }
 
-/**
- * Check if a user role qualifies as admin.
- * Uses word-boundary matching to avoid partial matches
- * (e.g., "Database Administrator" should NOT match "admin").
- */
-export const isAdmin = (userRole: string | undefined | null): boolean => {
-  if (!userRole) {
-    return false;
+const IMPOSSIBLE_ACCESS_VALUE = '__rbac_no_access__';
+
+function normalizeDepartmentName(value?: string | null): string {
+  return value?.trim() || '';
+}
+
+function dedupeProjects(projects: ProjectIdentifierDocument[]): ProjectIdentifierDocument[] {
+  const projectsById = new Map<string, ProjectIdentifierDocument>();
+
+  for (const project of projects) {
+    projectsById.set(project._id.toString(), project);
   }
 
-  const adminRoles = ['ceo', 'cto', 'manager', 'director', 'admin'];
-  const words = userRole.toLowerCase().split(/[\s/,\-_]+/);
-  return adminRoles.some((role) => words.includes(role));
-};
+  return [...projectsById.values()];
+}
+
+function toProjectIdentifiers(projects: ProjectIdentifierDocument[]): ProjectIdentifiers {
+  return {
+    projectIds: [...new Set(projects.map((project) => project._id.toString()))],
+    projectGitlabIds: [
+      ...new Set(
+        projects
+          .map((project) => project.gitlabId)
+          .filter((gitlabId): gitlabId is number => typeof gitlabId === 'number')
+      ),
+    ],
+  };
+}
+
+function buildProjectIdentifierSet(projects: ProjectIdentifierDocument[]): Set<string> {
+  const identifiers = new Set<string>();
+
+  for (const project of projects) {
+    identifiers.add(project._id.toString());
+    if (typeof project.gitlabId === 'number') {
+      identifiers.add(project.gitlabId.toString());
+    }
+  }
+
+  return identifiers;
+}
+
+export const isAdmin = (accessRole: string | undefined | null): boolean =>
+  normalizeAccessRole(accessRole) === ACCESS_ROLE.ADMIN;
 
 export const isSuperAdminUser = (
   value: GraphQLContext | Pick<AuthenticatedUser, 'isSuperAdmin'> | null | undefined
@@ -57,6 +107,32 @@ export const isSuperAdminUser = (
   }
 
   return value.isSuperAdmin === true;
+};
+
+export const isDepartmentInScope = (
+  value: GraphQLContext | AuthenticatedUser | null | undefined,
+  department: string | undefined | null
+): boolean => {
+  if (!value || !department) {
+    return false;
+  }
+
+  const currentUser = 'currentUser' in value ? value.currentUser : value;
+  if (!currentUser) {
+    return false;
+  }
+
+  if (currentUser.isSuperAdmin) {
+    return true;
+  }
+
+  const currentDepartment = normalizeDepartmentName(currentUser.department);
+  const targetDepartment = normalizeDepartmentName(department);
+  if (!currentDepartment || !targetDepartment) {
+    return false;
+  }
+
+  return currentDepartment.toLowerCase() === targetDepartment.toLowerCase();
 };
 
 /**
@@ -81,47 +157,109 @@ export const extractGitlabIdFromGid = (gid: string): number | null => {
   return null;
 };
 
-/**
- * Get the GitLab project IDs that a user is assigned to.
- * Reads from user.projects[] which stores GitLab GID strings.
- */
-export const getUserProjectGitlabIds = async (userId: string): Promise<number[]> => {
-  try {
-    const user = await User.findById(userId).select('projects').lean();
+async function resolveProjectsFromIdentifiers({
+  projectIds,
+  projectGitlabIds,
+}: ProjectIdentifiers): Promise<ProjectIdentifierDocument[]> {
+  const objectIds = projectIds
+    .filter((projectId) => mongoose.Types.ObjectId.isValid(projectId))
+    .map((projectId) => new mongoose.Types.ObjectId(projectId));
 
-    if (!user?.projects?.length) {
-      logger.info('User has no project assignments', { userId });
-      return [];
-    }
-
-    const gitlabIds = user.projects
-      .map((project: { id: string }) => extractGitlabIdFromGid(project.id))
-      .filter((id: number | null): id is number => id !== null);
-
-    logger.info('Extracted user project gitlabIds', {
-      userId,
-      projectCount: user.projects.length,
-      gitlabIdCount: gitlabIds.length,
-    });
-
-    return gitlabIds;
-  } catch (error) {
-    logger.error('Error getting user project gitlabIds', { userId, error });
-    return [];
+  const queryFilters: Array<Record<string, unknown>> = [];
+  if (objectIds.length > 0) {
+    queryFilters.push({ _id: { $in: objectIds } });
   }
-};
+  if (projectGitlabIds.length > 0) {
+    queryFilters.push({ gitlabId: { $in: projectGitlabIds } });
+  }
 
-async function resolveProjectsFromGitlabIds(gitlabIds: number[]): Promise<ProjectIdentifierDocument[]> {
-  if (gitlabIds.length === 0) {
+  if (queryFilters.length === 0) {
     return [];
   }
 
   return Project.find({
-    gitlabId: { $in: gitlabIds },
     isActive: true,
+    ...(queryFilters.length === 1 ? queryFilters[0] : { $or: queryFilters }),
   })
-    .select('_id gitlabId')
+    .select('_id gitlabId department')
     .lean();
+}
+
+async function resolveDepartmentProjects(departmentName: string): Promise<ProjectIdentifierDocument[]> {
+  const normalizedDepartment = normalizeDepartmentName(departmentName);
+  if (!normalizedDepartment) {
+    return [];
+  }
+
+  const [department, projectsByDepartment] = await Promise.all([
+    Department.findOne({ name: normalizedDepartment, isActive: true }).select('projects').lean(),
+    Project.find({ department: normalizedDepartment, isActive: true })
+      .select('_id gitlabId department')
+      .lean(),
+  ]);
+
+  const departmentProjectIdentifiers = Array.isArray(department?.projects)
+    ? department.projects
+        .map((identifier) => String(identifier).trim())
+        .filter((identifier) => identifier.length > 0)
+    : [];
+
+  const linkedProjects = await resolveProjectsFromIdentifiers({
+    projectIds: [...new Set(departmentProjectIdentifiers.filter((identifier) => mongoose.Types.ObjectId.isValid(identifier)))],
+    projectGitlabIds: [
+      ...new Set(
+        departmentProjectIdentifiers
+          .map((identifier) => extractGitlabIdFromGid(identifier))
+          .filter((gitlabId): gitlabId is number => gitlabId !== null)
+      ),
+    ],
+  });
+
+  return dedupeProjects([...projectsByDepartment, ...linkedProjects]);
+}
+
+export const getUserProjectIdentifiers = async (userId: string): Promise<ProjectIdentifiers> => {
+  try {
+    const user = await User.findById(userId).select('projects').lean();
+
+    if (!user?.projects?.length) {
+      return {
+        projectIds: [],
+        projectGitlabIds: [],
+      };
+    }
+
+    const projectIds = [
+      ...new Set(
+        user.projects
+          .map((project: { id: string }) => String(project.id).trim())
+          .filter((projectId: string) => mongoose.Types.ObjectId.isValid(projectId))
+      ),
+    ];
+    const projectGitlabIds = [
+      ...new Set(
+        user.projects
+          .map((project: { id: string }) => extractGitlabIdFromGid(project.id))
+          .filter((gitlabId: number | null): gitlabId is number => gitlabId !== null)
+      ),
+    ];
+
+    return {
+      projectIds,
+      projectGitlabIds,
+    };
+  } catch (error) {
+    logger.error('Error getting user project identifiers', { userId, error });
+    return {
+      projectIds: [],
+      projectGitlabIds: [],
+    };
+  }
+};
+
+export const getUserProjectGitlabIds = async (userId: string): Promise<number[]> => {
+  const identifiers = await getUserProjectIdentifiers(userId);
+  return identifiers.projectGitlabIds;
 }
 
 function mergeFilterWithConstraint(filter: FilterObject, constraint: FilterObject): FilterObject {
@@ -163,6 +301,19 @@ function getAccessibleValues(
     : accessibleProjects.projectIds;
 }
 
+function toMongoIdValues(values: string[]): Array<string | mongoose.Types.ObjectId> {
+  const expandedValues: Array<string | mongoose.Types.ObjectId> = [];
+
+  for (const value of values) {
+    expandedValues.push(value);
+    if (mongoose.Types.ObjectId.isValid(value)) {
+      expandedValues.push(new mongoose.Types.ObjectId(value));
+    }
+  }
+
+  return expandedValues;
+}
+
 /**
  * Resolve accessible projects from the authenticated GraphQL context.
  * Super admins bypass project filtering entirely. Everyone else, including
@@ -172,25 +323,66 @@ export const getContextAccessibleProjectIds = async (
   context: GraphQLContext
 ): Promise<ContextAccessibleProjectsResult> => {
   const currentUser = requireCurrentUser(context);
+  const accessRole = normalizeAccessRole(currentUser.accessRole);
+  const permissions = getPermissionsForAccessRole(accessRole, currentUser.isSuperAdmin);
 
   if (currentUser.isSuperAdmin) {
     return {
       isSuperAdmin: true,
       projectIds: [],
       projectGitlabIds: [],
+      accessRole,
+      permissions,
+    };
+  }
+
+  const projectAccessScope = getProjectAccessScope(accessRole, currentUser.isSuperAdmin);
+  if (projectAccessScope === 'none') {
+    return {
+      isSuperAdmin: false,
+      projectIds: [],
+      projectGitlabIds: [],
+      accessRole,
+      permissions,
     };
   }
 
   try {
-    const gitlabIds = await getUserProjectGitlabIds(currentUser.userId);
-    const projects = await resolveProjectsFromGitlabIds(gitlabIds);
+    if (projectAccessScope === 'department') {
+      const departmentProjects = await resolveDepartmentProjects(currentUser.department);
+      const identifiers = toProjectIdentifiers(departmentProjects);
+
+      return {
+        isSuperAdmin: false,
+        projectIds: identifiers.projectIds,
+        projectGitlabIds: identifiers.projectGitlabIds,
+        accessRole,
+        permissions,
+      };
+    }
+
+    const [assignedIdentifiers, departmentProjects] = await Promise.all([
+      getUserProjectIdentifiers(currentUser.userId),
+      resolveDepartmentProjects(currentUser.department),
+    ]);
+    const assignedProjects = await resolveProjectsFromIdentifiers(assignedIdentifiers);
+    const allowedDepartmentProjectIds = buildProjectIdentifierSet(departmentProjects);
+    const scopedProjects = assignedProjects.filter((project) => {
+      const projectId = project._id.toString();
+      if (allowedDepartmentProjectIds.has(projectId)) {
+        return true;
+      }
+
+      return typeof project.gitlabId === 'number' && allowedDepartmentProjectIds.has(project.gitlabId.toString());
+    });
+    const identifiers = toProjectIdentifiers(scopedProjects);
 
     return {
       isSuperAdmin: false,
-      projectIds: projects.map((project) => project._id.toString()),
-      projectGitlabIds: projects
-        .map((project) => project.gitlabId)
-        .filter((gitlabId): gitlabId is number => typeof gitlabId === 'number'),
+      projectIds: identifiers.projectIds,
+      projectGitlabIds: identifiers.projectGitlabIds,
+      accessRole,
+      permissions,
     };
   } catch (error) {
     logger.error('Error resolving accessible projects from context', {
@@ -202,8 +394,56 @@ export const getContextAccessibleProjectIds = async (
       isSuperAdmin: false,
       projectIds: [],
       projectGitlabIds: [],
+      accessRole,
+      permissions,
     };
   }
+};
+
+export const requirePermission = (
+  context: GraphQLContext,
+  permission: Permission
+): AuthenticatedUser => {
+  const currentUser = requireCurrentUser(context);
+
+  if (currentUser.isSuperAdmin) {
+    return currentUser;
+  }
+
+  if (!hasPermission(currentUser.permissions, permission)) {
+    logger.warn('User denied permission', {
+      userId: currentUser.userId,
+      accessRole: currentUser.accessRole,
+      permission,
+    });
+    throw new AppError('Forbidden', 403);
+  }
+
+  return currentUser;
+};
+
+export const requireDepartmentScope = (
+  context: GraphQLContext,
+  department: string | undefined | null
+): string => {
+  const currentUser = requireCurrentUser(context);
+  const currentDepartment = normalizeDepartmentName(currentUser.department);
+  const requestedDepartment = normalizeDepartmentName(department) || currentDepartment;
+
+  if (currentUser.isSuperAdmin) {
+    return requestedDepartment;
+  }
+
+  if (!currentDepartment || !requestedDepartment || currentDepartment.toLowerCase() !== requestedDepartment.toLowerCase()) {
+    logger.warn('User denied department-scoped access', {
+      userId: currentUser.userId,
+      currentDepartment,
+      requestedDepartment,
+    });
+    throw new AppError('Forbidden', 403);
+  }
+
+  return requestedDepartment;
 };
 
 export const requireProjectAccess = async (
@@ -253,7 +493,54 @@ export const withProjectFilter = async (
 
   return mergeFilterWithConstraint(filter, {
     [projectField]: {
-      $in: accessibleValues,
+      $in: accessibleValues.length > 0 ? accessibleValues : [IMPOSSIBLE_ACCESS_VALUE],
+    },
+  });
+};
+
+export const requireSprintRepoAccess = async (
+  context: GraphQLContext,
+  sprintRepoId: string | null | undefined
+): Promise<void> => {
+  const currentUser = requireCurrentUser(context);
+
+  if (currentUser.isSuperAdmin) {
+    return;
+  }
+
+  const normalizedSprintRepoId = sprintRepoId ? String(sprintRepoId) : null;
+  if (!normalizedSprintRepoId) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  const accessibleSprintRepos = await getContextAccessibleSprintRepoIds(context);
+  if (!accessibleSprintRepos.sprintRepoIds.includes(normalizedSprintRepoId)) {
+    logger.warn('User denied sprint repo access', {
+      userId: currentUser.userId,
+      sprintRepoId: normalizedSprintRepoId,
+    });
+    throw new AppError('Forbidden', 403);
+  }
+};
+
+export const withSprintRepoFilter = async (
+  context: GraphQLContext,
+  filter: FilterObject,
+  sprintRepoField: string = 'sprintRepoId'
+): Promise<FilterObject> => {
+  const currentUser = requireCurrentUser(context);
+
+  if (currentUser.isSuperAdmin) {
+    return filter;
+  }
+
+  const accessibleSprintRepos = await getContextAccessibleSprintRepoIds(context);
+  return mergeFilterWithConstraint(filter, {
+    [sprintRepoField]: {
+      $in:
+        accessibleSprintRepos.sprintRepoIds.length > 0
+          ? toMongoIdValues(accessibleSprintRepos.sprintRepoIds)
+          : [IMPOSSIBLE_ACCESS_VALUE],
     },
   });
 };
@@ -313,25 +600,58 @@ export const getAccessibleProjectIds = async (
 ): Promise<AccessibleProjectsResult> => {
   logger.warn('Deprecated getAccessibleProjectIds called', { userId, userRole });
 
-  if (!userId || !userRole) {
+  if (!userId) {
     logger.warn('Missing userId or userRole for project access check', { userId, userRole });
     return { isAdminUser: false, projectIds: [], projectGitlabIds: [] };
   }
 
-  if (isAdmin(userRole)) {
-    return { isAdminUser: true, projectIds: [], projectGitlabIds: [] };
-  }
-
   try {
-    const gitlabIds = await getUserProjectGitlabIds(userId);
-    const projects = await resolveProjectsFromGitlabIds(gitlabIds);
+    const user = await User.findById(userId)
+      .select('_id email username gitlabId department role accessRole isActive isSuperAdmin')
+      .lean();
+    if (!user || !user.isActive) {
+      return { isAdminUser: false, projectIds: [], projectGitlabIds: [] };
+    }
+
+    if (user.isSuperAdmin) {
+      return { isAdminUser: true, projectIds: [], projectGitlabIds: [] };
+    }
+
+    const accessRole = normalizeAccessRole(user.accessRole);
+    if (getProjectAccessScope(accessRole) === 'department') {
+      const departmentProjects = await resolveDepartmentProjects(user.department);
+      const identifiers = toProjectIdentifiers(departmentProjects);
+      return {
+        isAdminUser: false,
+        projectIds: identifiers.projectIds,
+        projectGitlabIds: identifiers.projectGitlabIds,
+      };
+    }
+
+    if (getProjectAccessScope(accessRole) === 'none') {
+      return { isAdminUser: false, projectIds: [], projectGitlabIds: [] };
+    }
+
+    const [assignedIdentifiers, departmentProjects] = await Promise.all([
+      getUserProjectIdentifiers(userId),
+      resolveDepartmentProjects(user.department),
+    ]);
+    const assignedProjects = await resolveProjectsFromIdentifiers(assignedIdentifiers);
+    const allowedDepartmentProjectIds = buildProjectIdentifierSet(departmentProjects);
+    const scopedProjects = assignedProjects.filter((project) => {
+      const projectId = project._id.toString();
+      if (allowedDepartmentProjectIds.has(projectId)) {
+        return true;
+      }
+
+      return typeof project.gitlabId === 'number' && allowedDepartmentProjectIds.has(project.gitlabId.toString());
+    });
+    const identifiers = toProjectIdentifiers(scopedProjects);
 
     return {
       isAdminUser: false,
-      projectIds: projects.map((project) => project._id.toString()),
-      projectGitlabIds: projects
-        .map((project) => project.gitlabId)
-        .filter((gitlabId): gitlabId is number => typeof gitlabId === 'number'),
+      projectIds: identifiers.projectIds,
+      projectGitlabIds: identifiers.projectGitlabIds,
     };
   } catch (error) {
     logger.error('Error resolving accessible project IDs', { userId, error });

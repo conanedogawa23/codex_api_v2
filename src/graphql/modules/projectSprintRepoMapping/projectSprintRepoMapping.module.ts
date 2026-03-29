@@ -3,8 +3,32 @@ import { ProjectSprintRepoMapping } from '../../../models/ProjectSprintRepoMappi
 import { Project } from '../../../models/Project';
 import { SprintRepo } from '../../../models/SprintRepo';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canManageDepartmentSprints } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
+import { requireProjectAccess, requireSprintRepoAccess, withProjectFilter, withSprintRepoFilter } from '../../../utils/rbac';
 import mongoose from 'mongoose';
+
+async function requireMappingManagement(
+  context: GraphQLContext,
+  projectId?: string | null,
+  sprintRepoId?: string | null
+) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentSprints(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (projectId) {
+    await requireProjectAccess(context, projectId);
+  }
+
+  if (sprintRepoId) {
+    await requireSprintRepoAccess(context, sprintRepoId);
+  }
+
+  return currentUser;
+}
 
 export const projectSprintRepoMappingModule = createModule({
   id: 'projectSprintRepoMapping',
@@ -109,8 +133,9 @@ export const projectSprintRepoMappingModule = createModule({
     },
 
     Query: {
-      projectSprintRepoMapping: async (_: any, { id }: { id: string }) => {
+      projectSprintRepoMapping: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           if (!mongoose.Types.ObjectId.isValid(id)) {
             throw new AppError('Invalid mapping ID', 400);
           }
@@ -119,6 +144,8 @@ export const projectSprintRepoMappingModule = createModule({
           if (!mapping) {
             throw new AppError('Mapping not found', 404);
           }
+          await requireProjectAccess(context, mapping.projectId?.toString() || mapping.projectId);
+          await requireSprintRepoAccess(context, mapping.sprintRepoId?.toString() || mapping.sprintRepoId);
           return mapping;
         } catch (error) {
           logger.error('Error fetching mapping', { id, error });
@@ -134,9 +161,11 @@ export const projectSprintRepoMappingModule = createModule({
           isActive?: boolean;
           limit: number;
           offset: number;
-        }
+        },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = {};
           
           if (projectId) {
@@ -159,7 +188,10 @@ export const projectSprintRepoMappingModule = createModule({
             filter.isActive = true; // Default to active mappings
           }
 
-          const mappings = await ProjectSprintRepoMapping.find(filter)
+          const projectScopedFilter = await withProjectFilter(context, filter, 'projectId');
+          const scopedFilter = await withSprintRepoFilter(context, projectScopedFilter, 'sprintRepoId');
+
+          const mappings = await ProjectSprintRepoMapping.find(scopedFilter)
             .sort({ createdAt: -1 })
             .limit(limit)
             .skip(offset)
@@ -172,11 +204,14 @@ export const projectSprintRepoMappingModule = createModule({
         }
       },
 
-      sprintReposByProject: async (_: any, { projectId }: { projectId: string }) => {
+      sprintReposByProject: async (_: any, { projectId }: { projectId: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
             throw new AppError('Invalid project ID', 400);
           }
+
+          await requireProjectAccess(context, projectId);
 
           // Fetch active mappings for the project
           const mappings = await ProjectSprintRepoMapping.find({
@@ -192,10 +227,12 @@ export const projectSprintRepoMappingModule = createModule({
           const sprintRepoIds = mappings.map(m => m.sprintRepoId);
 
           // Fetch all sprintRepos in one query
-          const sprintRepos = await SprintRepo.find({
+          const scopedFilter = await withSprintRepoFilter(context, {
             _id: { $in: sprintRepoIds },
             isActive: true
-          })
+          }, '_id');
+
+          const sprintRepos = await SprintRepo.find(scopedFilter)
           .sort({ name: 1 })
           .lean();
 
@@ -206,11 +243,18 @@ export const projectSprintRepoMappingModule = createModule({
         }
       },
 
-      projectsBySprintRepo: async (_: any, { sprintRepoId }: { sprintRepoId: string }) => {
+      projectsBySprintRepo: async (
+        _: any,
+        { sprintRepoId }: { sprintRepoId: string },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
             throw new AppError('Invalid sprintRepo ID', 400);
           }
+
+          await requireSprintRepoAccess(context, sprintRepoId);
 
           // Fetch active mappings for the sprintRepo
           const mappings = await ProjectSprintRepoMapping.find({
@@ -226,10 +270,12 @@ export const projectSprintRepoMappingModule = createModule({
           const projectIds = mappings.map(m => m.projectId);
 
           // Fetch all projects in one query
-          const projects = await Project.find({
+          const scopedFilter = await withProjectFilter(context, {
             _id: { $in: projectIds },
             isActive: true
-          })
+          }, '_id');
+
+          const projects = await Project.find(scopedFilter)
           .sort({ name: 1 })
           .lean();
 
@@ -244,10 +290,12 @@ export const projectSprintRepoMappingModule = createModule({
     Mutation: {
       createProjectSprintRepoMapping: async (
         _: any,
-        { input }: { input: { projectId: string; sprintRepoId: string } }
+        { input }: { input: { projectId: string; sprintRepoId: string } },
+        context: GraphQLContext
       ) => {
         try {
           const { projectId, sprintRepoId } = input;
+          await requireMappingManagement(context, projectId, sprintRepoId);
 
           // Validate IDs
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -311,7 +359,11 @@ export const projectSprintRepoMappingModule = createModule({
         }
       },
 
-      deleteProjectSprintRepoMapping: async (_: any, { id }: { id: string }) => {
+      deleteProjectSprintRepoMapping: async (
+        _: any,
+        { id }: { id: string },
+        context: GraphQLContext
+      ) => {
         try {
           if (!mongoose.Types.ObjectId.isValid(id)) {
             throw new AppError('Invalid mapping ID', 400);
@@ -321,6 +373,12 @@ export const projectSprintRepoMappingModule = createModule({
           if (!mapping) {
             throw new AppError('Mapping not found', 404);
           }
+
+          await requireMappingManagement(
+            context,
+            mapping.projectId?.toString() || mapping.projectId,
+            mapping.sprintRepoId?.toString() || mapping.sprintRepoId
+          );
 
           // Soft delete
           await mapping.deactivate();
@@ -335,10 +393,12 @@ export const projectSprintRepoMappingModule = createModule({
 
       bulkCreateProjectSprintRepoMappings: async (
         _: any,
-        { input }: { input: { projectId: string; sprintRepoIds: string[] } }
+        { input }: { input: { projectId: string; sprintRepoIds: string[] } },
+        context: GraphQLContext
       ) => {
         try {
           const { projectId, sprintRepoIds } = input;
+          await requireMappingManagement(context, projectId);
 
           // Validate project ID
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -364,6 +424,10 @@ export const projectSprintRepoMappingModule = createModule({
 
           if (sprintRepos.length !== sprintRepoIds.length) {
             throw new AppError('One or more sprintRepos not found', 404);
+          }
+
+          for (const sprintRepoId of sprintRepoIds) {
+            await requireSprintRepoAccess(context, sprintRepoId);
           }
 
           const createdMappings: any[] = [];
@@ -428,7 +492,8 @@ export const projectSprintRepoMappingModule = createModule({
 
       bulkDeleteProjectSprintRepoMappings: async (
         _: any,
-        { input }: { input: { ids: string[] } }
+        { input }: { input: { ids: string[] } },
+        context: GraphQLContext
       ) => {
         try {
           const { ids } = input;
@@ -446,6 +511,11 @@ export const projectSprintRepoMappingModule = createModule({
             try {
               const mapping = await ProjectSprintRepoMapping.findById(id);
               if (mapping && mapping.isActive) {
+                await requireMappingManagement(
+                  context,
+                  mapping.projectId?.toString() || mapping.projectId,
+                  mapping.sprintRepoId?.toString() || mapping.sprintRepoId
+                );
                 await mapping.deactivate();
                 deletedCount++;
               }

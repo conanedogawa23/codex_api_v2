@@ -2,11 +2,20 @@ import { userSyncQueue } from '../config/queue';
 import { processUserSync, UserSyncJobData } from '../processors/users/userSync.processor';
 import { logger } from '../../utils/logger';
 
+export interface UserSyncSchedulerOptions {
+  scheduleRecurring?: boolean;
+  triggerImmediateSync?: boolean;
+}
+
 /**
  * Initialize User Sync Job Scheduler
  * Sets up a repeatable job that runs every 20 minutes
  */
-export const initializeUserSyncScheduler = async (): Promise<void> => {
+export const initializeUserSyncScheduler = async (
+  options: UserSyncSchedulerOptions = {}
+): Promise<void> => {
+  const { scheduleRecurring = true, triggerImmediateSync: shouldTriggerImmediateSync = scheduleRecurring } = options;
+
   try {
     logger.info('Initializing user sync scheduler...');
 
@@ -20,32 +29,36 @@ export const initializeUserSyncScheduler = async (): Promise<void> => {
       logger.info('Removed existing repeatable job', { key: job.key });
     }
 
-    // Schedule the job to run every 20 minutes
-    const jobData: UserSyncJobData = {
-      batchSize: 100
-    };
+    if (scheduleRecurring) {
+      const jobData: UserSyncJobData = {
+        batchSize: 100
+      };
 
-    const job = await userSyncQueue.add(jobData, {
-      repeat: {
-        every: 20 * 60 * 1000, // 20 minutes in milliseconds
-      },
-      removeOnComplete: 10, // Keep last 10 completed jobs
-      removeOnFail: 20, // Keep last 20 failed jobs for debugging
-      attempts: 3, // Retry up to 3 times on failure
-      backoff: {
-        type: 'exponential',
-        delay: 5000, // Start with 5 second delay
-      },
-    });
+      const job = await userSyncQueue.add(jobData, {
+        repeat: {
+          every: 20 * 60 * 1000, // 20 minutes in milliseconds
+        },
+        removeOnComplete: 10, // Keep last 10 completed jobs
+        removeOnFail: 20, // Keep last 20 failed jobs for debugging
+        attempts: 3, // Retry up to 3 times on failure
+        backoff: {
+          type: 'exponential',
+          delay: 5000, // Start with 5 second delay
+        },
+      });
 
-    logger.info('User sync scheduler initialized successfully', {
-      jobId: job.id,
-      repeatKey: job.opts.repeat?.key,
-      interval: '20 minutes'
-    });
+      logger.info('User sync scheduler initialized successfully', {
+        jobId: job.id,
+        repeatKey: job.opts.repeat?.key,
+        interval: '20 minutes'
+      });
+    } else {
+      logger.info('User sync scheduler initialized without recurring schedule');
+    }
 
-    // Optionally, trigger an immediate sync on startup
-    await triggerImmediateSync();
+    if (shouldTriggerImmediateSync) {
+      await triggerImmediateSync();
+    }
 
   } catch (error: any) {
     logger.error('Failed to initialize user sync scheduler', {

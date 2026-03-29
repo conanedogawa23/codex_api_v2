@@ -3,12 +3,30 @@ import { SprintRepo } from '../../../models/SprintRepo';
 import { Sprint } from '../../../models/Sprint';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { canManageDepartmentSprints } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
-import { getAccessibleSprintRepoIds } from '../../../utils/rbac';
+import { requireSprintRepoAccess, withSprintRepoFilter } from '../../../utils/rbac';
 import mongoose from 'mongoose';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function requireSprintRepoManagement(
+  context: GraphQLContext,
+  sprintRepoId?: string | null
+) {
+  const currentUser = requireCurrentUser(context);
+  if (!canManageDepartmentSprints(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (sprintRepoId) {
+    await requireSprintRepoAccess(context, sprintRepoId);
+  }
+
+  return currentUser;
 }
 
 export const sprintRepoModule = createModule({
@@ -134,22 +152,19 @@ export const sprintRepoModule = createModule({
     },
 
     Query: {
-      sprintRepo: async (_: any, { id, userId, userRole }: { id: string; userId?: string; userRole?: string }) => {
+      sprintRepo: async (
+        _: any,
+        { id, userId, userRole }: { id: string; userId?: string; userRole?: string },
+        context: GraphQLContext
+      ) => {
         try {
-          // Apply role-based access control
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // Check if user has access to this specific sprint repo
-            if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(id)) {
-              throw new AppError('Access denied: Sprint repository not found', 404);
-            }
-          }
+          requireCurrentUser(context);
 
           const sprintRepo = await SprintRepo.findById(id).lean();
           if (!sprintRepo) {
             throw new AppError('Sprint repository not found', 404);
           }
+          await requireSprintRepoAccess(context, sprintRepo._id?.toString() || id);
           return sprintRepo;
         } catch (error) {
           logger.error('Error fetching sprint repository', { id, userId, error });
@@ -157,23 +172,19 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      sprintRepoByKey: async (_: any, { key, userId, userRole }: { key: string; userId?: string; userRole?: string }) => {
+      sprintRepoByKey: async (
+        _: any,
+        { key, userId, userRole }: { key: string; userId?: string; userRole?: string },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           const sprintRepo = await SprintRepo.findByKey(key);
           if (!sprintRepo) {
             throw new AppError('Sprint repository not found', 404);
           }
 
-          // Apply role-based access control
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            const sprintRepoId = sprintRepo._id.toString();
-            
-            // Check if user has access to this specific sprint repo
-            if (accessibleSprintRepoIds.length > 0 && !accessibleSprintRepoIds.includes(sprintRepoId)) {
-              throw new AppError('Access denied: Sprint repository not found', 404);
-            }
-          }
+          await requireSprintRepoAccess(context, sprintRepo._id?.toString());
 
           return sprintRepo;
         } catch (error) {
@@ -200,34 +211,12 @@ export const sprintRepoModule = createModule({
           search?: string;
           userId?: string;
           userRole?: string;
-        }
+        },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const andConditions: Record<string, unknown>[] = [{ isActive: true }];
-
-          // Apply role-based filtering if userId and userRole are provided
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return {
-                sprintRepos: [],
-                totalCount: 0,
-              };
-            }
-            
-            // If not admin and has accessible repos, filter by them
-            if (accessibleSprintRepoIds.length > 0) {
-              andConditions.push({
-                _id: {
-                  $in: accessibleSprintRepoIds
-                    .filter((id) => mongoose.Types.ObjectId.isValid(id))
-                    .map((id) => new mongoose.Types.ObjectId(id)),
-                },
-              });
-            }
-          }
 
           if (status) {
             andConditions.push({ status: status.toLowerCase() });
@@ -251,14 +240,15 @@ export const sprintRepoModule = createModule({
           }
 
           const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+          const scopedFilter = await withSprintRepoFilter(context, filter, '_id');
 
           const [sprintRepos, totalCount] = await Promise.all([
-            SprintRepo.find(filter)
+            SprintRepo.find(scopedFilter)
               .sort({ createdAt: -1 })
               .limit(limit)
               .skip(offset)
               .lean(),
-            SprintRepo.countDocuments(filter),
+            SprintRepo.countDocuments(scopedFilter),
           ]);
 
           return {
@@ -273,30 +263,19 @@ export const sprintRepoModule = createModule({
 
       sprintReposByGroup: async (
         _: any,
-        { groupId, status, limit, userId, userRole }: { groupId: string; status?: string; limit: number; userId?: string; userRole?: string }
+        { groupId, status, limit, userId, userRole }: { groupId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = { groupId, isActive: true };
           if (status) {
             filter.status = status.toLowerCase();
           }
 
-          // Apply role-based filtering if userId and userRole are provided
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
-            }
-            
-            // If not admin and has accessible repos, filter by them
-            if (accessibleSprintRepoIds.length > 0) {
-              filter._id = { $in: accessibleSprintRepoIds.map(id => new mongoose.Types.ObjectId(id)) };
-            }
-          }
+          const scopedFilter = await withSprintRepoFilter(context, filter, '_id');
 
-          return await SprintRepo.find(filter)
+          return await SprintRepo.find(scopedFilter)
             .sort({ createdAt: -1 })
             .limit(limit)
             .lean();
@@ -308,30 +287,19 @@ export const sprintRepoModule = createModule({
 
       sprintReposByOwner: async (
         _: any,
-        { ownerId, status, limit, userId, userRole }: { ownerId: string; status?: string; limit: number; userId?: string; userRole?: string }
+        { ownerId, status, limit, userId, userRole }: { ownerId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = { ownerId, isActive: true };
           if (status) {
             filter.status = status.toLowerCase();
           }
 
-          // Apply role-based filtering if userId and userRole are provided
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
-            }
-            
-            // If not admin and has accessible repos, filter by them
-            if (accessibleSprintRepoIds.length > 0) {
-              filter._id = { $in: accessibleSprintRepoIds.map(id => new mongoose.Types.ObjectId(id)) };
-            }
-          }
+          const scopedFilter = await withSprintRepoFilter(context, filter, '_id');
 
-          return await SprintRepo.find(filter)
+          return await SprintRepo.find(scopedFilter)
             .sort({ createdAt: -1 })
             .limit(limit)
             .lean();
@@ -343,27 +311,16 @@ export const sprintRepoModule = createModule({
 
       sprintReposByStatus: async (
         _: any,
-        { status, limit, userId, userRole }: { status: string; limit: number; userId?: string; userRole?: string }
+        { status, limit, userId, userRole }: { status: string; limit: number; userId?: string; userRole?: string },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = { status: status.toLowerCase(), isActive: true };
 
-          // Apply role-based filtering if userId and userRole are provided
-          if (userId && userRole) {
-            const accessibleSprintRepoIds = await getAccessibleSprintRepoIds(userId, userRole);
-            
-            // If user has no access, return empty array
-            if (accessibleSprintRepoIds.length === 1 && accessibleSprintRepoIds[0] === 'no-access') {
-              return [];
-            }
-            
-            // If not admin and has accessible repos, filter by them
-            if (accessibleSprintRepoIds.length > 0) {
-              filter._id = { $in: accessibleSprintRepoIds.map(id => new mongoose.Types.ObjectId(id)) };
-            }
-          }
+          const scopedFilter = await withSprintRepoFilter(context, filter, '_id');
 
-          return await SprintRepo.find(filter)
+          return await SprintRepo.find(scopedFilter)
             .sort({ createdAt: -1 })
             .limit(limit)
             .lean();
@@ -375,8 +332,10 @@ export const sprintRepoModule = createModule({
     },
 
     Mutation: {
-      createSprintRepo: async (_: any, { input }: { input: any }) => {
+      createSprintRepo: async (_: any, { input }: { input: any }, context: GraphQLContext) => {
         try {
+          await requireSprintRepoManagement(context);
+
           // Validate dates if both are provided
           if (input.startDate && input.endDate) {
             if (new Date(input.endDate) <= new Date(input.startDate)) {
@@ -404,8 +363,14 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      updateSprintRepo: async (_: any, { id, input }: { id: string; input: any }) => {
+      updateSprintRepo: async (
+        _: any,
+        { id, input }: { id: string; input: any },
+        context: GraphQLContext
+      ) => {
         try {
+          await requireSprintRepoManagement(context, id);
+
           // Validate dates if both are provided
           if (input.startDate && input.endDate) {
             if (new Date(input.endDate) <= new Date(input.startDate)) {
@@ -436,8 +401,10 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      deleteSprintRepo: async (_: any, { id }: { id: string }) => {
+      deleteSprintRepo: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          await requireSprintRepoManagement(context, id);
+
           // Soft delete
           const sprintRepo = await SprintRepo.findByIdAndUpdate(
             id,
@@ -457,8 +424,9 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      archiveSprintRepo: async (_: any, { id }: { id: string }) => {
+      archiveSprintRepo: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          await requireSprintRepoManagement(context, id);
           const sprintRepo = await SprintRepo.findById(id);
           if (!sprintRepo) {
             throw new AppError('Sprint repository not found', 404);
@@ -473,8 +441,9 @@ export const sprintRepoModule = createModule({
         }
       },
 
-      activateSprintRepo: async (_: any, { id }: { id: string }) => {
+      activateSprintRepo: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          await requireSprintRepoManagement(context, id);
           const sprintRepo = await SprintRepo.findById(id);
           if (!sprintRepo) {
             throw new AppError('Sprint repository not found', 404);

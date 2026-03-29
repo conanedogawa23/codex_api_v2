@@ -2,11 +2,20 @@ import { projectSyncQueue } from '../config/queue';
 import { processProjectSync, ProjectSyncJobData } from '../processors/projects/projectSync.processor';
 import { logger } from '../../utils/logger';
 
+export interface ProjectSyncSchedulerOptions {
+  scheduleRecurring?: boolean;
+  triggerImmediateSync?: boolean;
+}
+
 /**
  * Initialize Project Sync Job Scheduler
  * Sets up a repeatable job that runs every 30 minutes (medium priority sync)
  */
-export const initializeProjectSyncScheduler = async (): Promise<void> => {
+export const initializeProjectSyncScheduler = async (
+  options: ProjectSyncSchedulerOptions = {}
+): Promise<void> => {
+  const { scheduleRecurring = true, triggerImmediateSync: shouldTriggerImmediateSync = scheduleRecurring } = options;
+
   try {
     logger.info('Initializing project sync scheduler...');
 
@@ -20,32 +29,36 @@ export const initializeProjectSyncScheduler = async (): Promise<void> => {
       logger.info('Removed existing repeatable project sync job', { key: job.key });
     }
 
-    // Schedule the job to run every 30 minutes
-    const jobData: ProjectSyncJobData = {
-      batchSize: 100
-    };
+    if (scheduleRecurring) {
+      const jobData: ProjectSyncJobData = {
+        batchSize: 100
+      };
 
-    const job = await projectSyncQueue.add(jobData, {
-      repeat: {
-        every: 30 * 60 * 1000, // 30 minutes in milliseconds
-      },
-      removeOnComplete: 10, // Keep last 10 completed jobs
-      removeOnFail: 20, // Keep last 20 failed jobs for debugging
-      attempts: 3, // Retry up to 3 times on failure
-      backoff: {
-        type: 'exponential',
-        delay: 5000, // Start with 5 second delay
-      },
-    });
+      const job = await projectSyncQueue.add(jobData, {
+        repeat: {
+          every: 30 * 60 * 1000, // 30 minutes in milliseconds
+        },
+        removeOnComplete: 10, // Keep last 10 completed jobs
+        removeOnFail: 20, // Keep last 20 failed jobs for debugging
+        attempts: 3, // Retry up to 3 times on failure
+        backoff: {
+          type: 'exponential',
+          delay: 5000, // Start with 5 second delay
+        },
+      });
 
-    logger.info('Project sync scheduler initialized successfully', {
-      jobId: job.id,
-      repeatKey: job.opts.repeat?.key,
-      interval: '30 minutes'
-    });
+      logger.info('Project sync scheduler initialized successfully', {
+        jobId: job.id,
+        repeatKey: job.opts.repeat?.key,
+        interval: '30 minutes'
+      });
+    } else {
+      logger.info('Project sync scheduler initialized without recurring schedule');
+    }
 
-    // Optionally, trigger an immediate sync on startup
-    await triggerImmediateSync();
+    if (shouldTriggerImmediateSync) {
+      await triggerImmediateSync();
+    }
 
   } catch (error: unknown) {
     logger.error('Failed to initialize project sync scheduler', {

@@ -5,7 +5,14 @@ import { Project } from '../../../models/Project';
 import { Sprint } from '../../../models/Sprint';
 import { Pipeline } from '../../../models/Pipeline';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { ACCESS_ROLE, normalizeAccessRole } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
+import {
+  getContextAccessibleProjectIds,
+  requireProjectAccess,
+  withSprintRepoFilter,
+} from '../../../utils/rbac';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -22,6 +29,68 @@ function buildProjectIdInValues(projectIds: string[]): any[] {
   }
 
   return values;
+}
+
+const IMPOSSIBLE_ANALYTICS_PROJECT_ID = '__rbac_no_analytics__';
+
+async function getScopedProjectIds(
+  context: GraphQLContext,
+  projectId?: string
+): Promise<string[] | null> {
+  const currentUser = requireCurrentUser(context);
+
+  if (projectId) {
+    await requireProjectAccess(context, projectId);
+    return [projectId];
+  }
+
+  if (currentUser.isSuperAdmin) {
+    return null;
+  }
+
+  const accessibleProjects = await getContextAccessibleProjectIds(context);
+  return accessibleProjects.projectIds.length > 0
+    ? accessibleProjects.projectIds
+    : [IMPOSSIBLE_ANALYTICS_PROJECT_ID];
+}
+
+async function getScopedReportingProjectIds(
+  context: GraphQLContext,
+  projectId?: string
+): Promise<{ projectIds: string[] | null; accessRole: string; department: string }> {
+  const currentUser = requireCurrentUser(context);
+  const accessRole = normalizeAccessRole(currentUser.accessRole);
+
+  if (currentUser.isSuperAdmin || accessRole === ACCESS_ROLE.FINANCE) {
+    return {
+      projectIds: projectId ? [projectId] : null,
+      accessRole,
+      department: currentUser.department,
+    };
+  }
+
+  if (accessRole !== ACCESS_ROLE.CLUSTER_SUPER_ADMIN) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (projectId) {
+    await requireProjectAccess(context, projectId);
+    return {
+      projectIds: [projectId],
+      accessRole,
+      department: currentUser.department,
+    };
+  }
+
+  const accessibleProjects = await getContextAccessibleProjectIds(context);
+  return {
+    projectIds:
+      accessibleProjects.projectIds.length > 0
+        ? accessibleProjects.projectIds
+        : [IMPOSSIBLE_ANALYTICS_PROJECT_ID],
+    accessRole,
+    department: currentUser.department,
+  };
 }
 
 export const analyticsModule = createModule({
@@ -165,10 +234,17 @@ export const analyticsModule = createModule({
   `,
   resolvers: {
     Query: {
-      taskStatusAnalytics: async (_: any, { projectId, sprintId }: { projectId?: string; sprintId?: string }) => {
+      taskStatusAnalytics: async (
+        _: any,
+        { projectId, sprintId }: { projectId?: string; sprintId?: string },
+        context: GraphQLContext
+      ) => {
         try {
           const filter: any = { isActive: true };
-          if (projectId) filter.projectId = projectId;
+          const scopedProjectIds = await getScopedProjectIds(context, projectId);
+          if (scopedProjectIds) {
+            filter.projectId = { $in: buildProjectIdInValues(scopedProjectIds) };
+          }
           if (sprintId) filter.sprintId = sprintId;
 
           const statusCounts = await Task.aggregate([
@@ -260,8 +336,13 @@ export const analyticsModule = createModule({
         }
       },
 
-      sprintVelocityAnalytics: async (_: any, { sprintRepoId, limit = 10 }: { sprintRepoId?: string; limit: number }) => {
+      sprintVelocityAnalytics: async (
+        _: any,
+        { sprintRepoId, limit = 10 }: { sprintRepoId?: string; limit: number },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           const filter: any = { isActive: true };
           if (sprintRepoId) {
             filter.sprintRepoId = mongoose.Types.ObjectId.isValid(sprintRepoId) 
@@ -269,7 +350,9 @@ export const analyticsModule = createModule({
               : sprintRepoId;
           }
 
-          const sprints = await Sprint.find(filter)
+          const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
+
+          const sprints = await Sprint.find(scopedFilter)
             .sort({ startDate: -1 })
             .limit(limit)
             .lean();
@@ -328,16 +411,21 @@ export const analyticsModule = createModule({
 
       resourceAllocationAnalytics: async (
         _: any,
-        { projectId, limit = 20, offset = 0, search }: { projectId?: string; limit?: number; offset?: number; search?: string }
+        { projectId, limit = 20, offset = 0, search }: { projectId?: string; limit?: number; offset?: number; search?: string },
+        context: GraphQLContext
       ) => {
         try {
+          const { projectIds, accessRole, department } = await getScopedReportingProjectIds(
+            context,
+            projectId
+          );
           const taskMatch: any = {
             isActive: true,
             'assignedTo.id': { $exists: true, $ne: null },
           };
 
-          if (projectId) {
-            taskMatch.projectId = { $in: buildProjectIdInValues([projectId]) };
+          if (projectIds) {
+            taskMatch.projectId = { $in: buildProjectIdInValues(projectIds) };
           }
 
           const trimmedSearch = search?.trim();
@@ -393,6 +481,14 @@ export const analyticsModule = createModule({
               },
             },
           ];
+
+          if (accessRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN) {
+            resourcePipeline.push({
+              $match: {
+                department,
+              },
+            });
+          }
 
           if (trimmedSearch) {
             const escapedSearch = escapeRegex(trimmedSearch);
@@ -505,11 +601,17 @@ export const analyticsModule = createModule({
 
       projectProgressAnalytics: async (
         _: any,
-        { limit = 20, offset = 0, search, budgetOnly = false }: { limit?: number; offset?: number; search?: string; budgetOnly?: boolean }
+        { limit = 20, offset = 0, search, budgetOnly = false }: { limit?: number; offset?: number; search?: string; budgetOnly?: boolean },
+        context: GraphQLContext
       ) => {
         try {
           const projectFilter: any = { isActive: true };
+          const { projectIds } = await getScopedReportingProjectIds(context);
           const trimmedSearch = search?.trim();
+
+          if (projectIds) {
+            projectFilter._id = { $in: buildProjectIdInValues(projectIds) };
+          }
 
           if (budgetOnly) {
             projectFilter['budget.allocated'] = { $gt: 0 };
@@ -528,12 +630,12 @@ export const analyticsModule = createModule({
             .sort({ lastActivityAt: -1 })
             .lean();
 
-          const projectIds = matchingProjects.map((project: any) => project._id.toString());
-          const taskStats = projectIds.length > 0
+          const matchingProjectIds = matchingProjects.map((project: any) => project._id.toString());
+          const taskStats = matchingProjectIds.length > 0
             ? await Task.aggregate([
                 {
                   $match: {
-                    projectId: { $in: buildProjectIdInValues(projectIds) },
+                    projectId: { $in: buildProjectIdInValues(matchingProjectIds) },
                     isActive: true,
                   },
                 },
@@ -617,10 +719,17 @@ export const analyticsModule = createModule({
         }
       },
 
-      pipelineAnalytics: async (_: any, { projectId }: { projectId?: string }) => {
+      pipelineAnalytics: async (
+        _: any,
+        { projectId }: { projectId?: string },
+        context: GraphQLContext
+      ) => {
         try {
           const filter: any = { isDeleted: false };
-          if (projectId) filter.projectId = projectId;
+          const scopedProjectIds = await getScopedProjectIds(context, projectId);
+          if (scopedProjectIds) {
+            filter.projectId = { $in: scopedProjectIds };
+          }
 
           const statusCounts = await Pipeline.aggregate([
             { $match: filter },
