@@ -1,6 +1,7 @@
 import { Job } from 'bull';
 import { BaseSyncProcessor, SyncOptions, SyncResult } from '../base/baseSyncProcessor';
 import { Commit, ICommit } from '../../../models/Commit';
+import { User } from '../../../models/User';
 import { logger } from '../../../utils/logger';
 import { gitlabCommitProcessor } from './gitlabCommitProcessor';
 import moment from 'moment-timezone';
@@ -13,6 +14,39 @@ export interface CommitSyncJobData extends ProjectScopedSyncOptions {
 class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
   readonly entityName = 'commit';
   readonly categories = ['coreData', 'diffStats'];
+  private readonly userIdByEmail = new Map<string, string | null>();
+
+  private async resolveCommitUserId(authorEmail?: string, committerEmail?: string) {
+    const candidates = [authorEmail, committerEmail]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase());
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    for (const email of candidates) {
+      if (this.userIdByEmail.has(email)) {
+        const cachedUserId = this.userIdByEmail.get(email);
+        return cachedUserId || undefined;
+      }
+    }
+
+    const matchedUser = await User.findOne({ email: { $in: candidates } })
+      .select('_id email')
+      .lean();
+
+    const matchedEmail = typeof matchedUser?.email === 'string'
+      ? matchedUser.email.trim().toLowerCase()
+      : undefined;
+    const matchedUserId = matchedUser?._id?.toString() || null;
+
+    for (const email of candidates) {
+      this.userIdByEmail.set(email, matchedUserId && email === matchedEmail ? matchedUserId : null);
+    }
+
+    return matchedUserId || undefined;
+  }
 
   async fetchFromGitLab(options: SyncOptions): Promise<any[]> {
     const projectPath = (options as CommitSyncJobData).projectPath;
@@ -78,6 +112,10 @@ class CommitSyncProcessor extends BaseSyncProcessor<ICommit> {
 
     const wrappedData = { commits: [entity] };
     const mappedData = this.mapToModel(wrappedData);
+    const matchedUserId = await this.resolveCommitUserId(mappedData.authorEmail, mappedData.committerEmail);
+    if (matchedUserId) {
+      mappedData.userId = matchedUserId as any;
+    }
     this.updateCategoryTimestamps(mappedData, wrappedData, categorySyncResults);
     const savedEntity = await this.updateModel(mappedData);
 

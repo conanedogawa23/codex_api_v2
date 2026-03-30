@@ -59,6 +59,7 @@ export const commitModule = createModule({
     extend type Query {
       commit(sha: String!): Commit
       commits(projectId: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
+      commitCount(projectId: String!): Int!
       commitsByProject(projectId: String!, limit: Int = 20): [Commit!]!
       commitsByAuthor(authorEmail: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
       projectsWithCommitActivity(
@@ -114,6 +115,23 @@ export const commitModule = createModule({
           .skip(offset)
           .sort({ authoredDate: -1 })
           .lean();
+      },
+
+      commitCount: async (
+        _: any,
+        { projectId }: { projectId: string },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
+        logger.info('Counting commits', { projectId });
+        const filter = await withProjectFilter(
+          context,
+          { projectId, isDeleted: false },
+          'projectId',
+          'gitlab'
+        );
+
+        return await Commit.countDocuments(filter);
       },
 
       commitsByProject: async (
