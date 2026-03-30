@@ -4,6 +4,91 @@ import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
+import { gitlabApi, type GitLabMergeRequestListItem } from '../../../utils/gitlabApi';
+
+const mapMrUser = (u: {
+  id: number;
+  name: string;
+  username: string;
+  email?: string;
+  avatar_url?: string;
+}) => ({
+  id: u.id,
+  name: u.name,
+  username: u.username,
+  email: u.email,
+  avatarUrl: u.avatar_url,
+});
+
+const normalizeMrLabels = (raw: GitLabMergeRequestListItem['labels']): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name || ''))
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const mapMergeStatus = (raw: string | undefined): string => {
+  if (!raw) return 'unchecked';
+  const k = raw.toLowerCase();
+  if (k === 'can_be_merged') return 'can_be_merged';
+  if (k === 'cannot_be_merged') return 'cannot_be_merged';
+  return 'unchecked';
+};
+
+const mapMrState = (raw: string | undefined): string => {
+  if (!raw) return 'opened';
+  const k = raw.toLowerCase();
+  if (k === 'merged' || k === 'closed' || k === 'locked' || k === 'opened') {
+    return k;
+  }
+  return 'opened';
+};
+
+const mapGitLabMergeRequestToMergeRequest = (row: GitLabMergeRequestListItem) => {
+  const now = new Date();
+  const author = row.author
+    ? mapMrUser(row.author)
+    : { id: 0, name: 'Unknown', username: 'unknown', email: undefined, avatarUrl: undefined };
+
+  const milestone = row.milestone
+    ? {
+        id: row.milestone.id,
+        title: row.milestone.title,
+        description: row.milestone.description ?? undefined,
+        state: String(row.milestone.state || 'active'),
+        dueDate: row.milestone.due_date ? new Date(row.milestone.due_date) : undefined,
+      }
+    : undefined;
+
+  return {
+    id: `live-mr-${row.id}`,
+    gitlabId: row.id,
+    iid: row.iid,
+    projectId: row.project_id,
+    title: row.title ?? '',
+    description: row.description ?? undefined,
+    state: mapMrState(row.state),
+    mergeStatus: mapMergeStatus(row.merge_status),
+    sourceBranch: row.source_branch ?? '',
+    targetBranch: row.target_branch ?? '',
+    labels: normalizeMrLabels(row.labels),
+    milestone,
+    assignees: (row.assignees ?? []).map(mapMrUser),
+    reviewers: (row.reviewers ?? []).map(mapMrUser),
+    author,
+    webUrl: row.web_url ?? '',
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    mergedAt: row.merged_at ? new Date(row.merged_at) : undefined,
+    closedAt: row.closed_at ? new Date(row.closed_at) : undefined,
+    firstDeployedToProductionAt: undefined,
+    lastSynced: now,
+    isActive: true,
+  };
+};
 
 export const mergeRequestModule = createModule({
   id: 'mergeRequest',
@@ -74,6 +159,11 @@ export const mergeRequestModule = createModule({
       totalCount: Int!
     }
 
+    enum MergeRequestSource {
+      DATABASE
+      LIVE
+    }
+
     extend type Query {
       mergeRequest(id: ID!): MergeRequest
       mergeRequestByGitlabId(gitlabId: Int!): MergeRequest
@@ -87,7 +177,14 @@ export const mergeRequestModule = createModule({
         offset: Int = 0
       ): [MergeRequest!]!
       mergeRequestsByProject(projectId: Int!, state: MergeRequestState, limit: Int = 20): [MergeRequest!]!
-      gitlabMergeRequests(projectId: String!, state: MergeRequestState, limit: Int = 20, offset: Int = 0, search: String): GitLabMergeRequestsResult!
+      gitlabMergeRequests(
+        projectId: String!
+        state: MergeRequestState
+        limit: Int = 20
+        offset: Int = 0
+        search: String
+        source: MergeRequestSource = DATABASE
+      ): GitLabMergeRequestsResult!
     }
 
     extend type Mutation {
@@ -164,11 +261,49 @@ export const mergeRequestModule = createModule({
 
       gitlabMergeRequests: async (
         _: any,
-        { projectId, state, limit = 20, offset = 0, search }: { projectId: string; state?: string; limit: number; offset: number; search?: string },
+        {
+          projectId,
+          state,
+          limit = 20,
+          offset = 0,
+          search,
+          source = 'DATABASE',
+        }: {
+          projectId: string;
+          state?: string;
+          limit: number;
+          offset: number;
+          search?: string;
+          source?: 'DATABASE' | 'LIVE';
+        },
         context: GraphQLContext
       ) => {
         requireCurrentUser(context);
-        // Convert projectId string to number for MongoDB query
+        logger.info('gitlabMergeRequests', { projectId, state, limit, offset, source });
+
+        if (source === 'LIVE') {
+          await requireProjectAccess(context, projectId, 'gitlab');
+          if (limit <= 0) {
+            return { mergeRequests: [], totalCount: 0 };
+          }
+          const perPage = Math.min(limit, 100);
+          const page = Math.floor(offset / perPage) + 1;
+          const withinPageStart = offset - (page - 1) * perPage;
+          const stateParam = state ? String(state).toLowerCase() : undefined;
+          const { mergeRequests: rows, total } = await gitlabApi.listProjectMergeRequestsPage(
+            projectId,
+            page,
+            perPage,
+            stateParam,
+            search
+          );
+          const sliced = rows.slice(withinPageStart, withinPageStart + limit);
+          return {
+            mergeRequests: sliced.map(mapGitLabMergeRequestToMergeRequest),
+            totalCount: total ?? 0,
+          };
+        }
+
         const projectIdNum = parseInt(projectId, 10);
         const filter: any = { projectId: projectIdNum };
         if (state) filter.state = state;

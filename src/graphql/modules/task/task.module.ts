@@ -14,6 +14,7 @@ import {
 import {
   buildMixedIdValues,
   buildTaskScopeFilter,
+  getActiveSprintRepoIdsForProjects,
   getUniquelyMappedSprintRepoIds,
 } from '../../../utils/taskProjectScope';
 
@@ -507,7 +508,7 @@ export const taskModule = createModule({
       ) => {
         requireCurrentUser(context);
         await requireProjectAccess(context, projectId);
-        const sprintRepoIds = await getUniquelyMappedSprintRepoIds([projectId]);
+        const sprintRepoIds = await getActiveSprintRepoIdsForProjects([projectId]);
 
         // Use raw collection to handle mixed ObjectId/String projectId
         const db = mongoose.connection.db;

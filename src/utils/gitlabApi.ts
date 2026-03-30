@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
 import { environment } from '../config/environment';
 import { logger } from './logger';
 import { AppError } from '../middleware';
@@ -77,6 +77,64 @@ interface GitLabCommitResponse {
 
 export interface GitLabCommitListPage {
   commits: GitLabCommitResponse[];
+  total: number | null;
+}
+
+export interface GitLabPipelineListPage {
+  pipelines: GitLabPipelineResponse[];
+  total: number | null;
+}
+
+/** GitLab REST merge request list item (subset of fields we map to GraphQL). */
+export interface GitLabMergeRequestListItem {
+  id: number;
+  iid: number;
+  project_id: number;
+  title: string;
+  description: string | null;
+  state: string;
+  merged_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  source_branch: string;
+  target_branch: string;
+  web_url: string;
+  labels?: string[] | string;
+  merge_status?: string;
+  draft?: boolean;
+  author?: {
+    id: number;
+    name: string;
+    username: string;
+    email?: string;
+    avatar_url?: string;
+  };
+  assignees?: Array<{
+    id: number;
+    name: string;
+    username: string;
+    email?: string;
+    avatar_url?: string;
+  }>;
+  reviewers?: Array<{
+    id: number;
+    name: string;
+    username: string;
+    email?: string;
+    avatar_url?: string;
+  }>;
+  milestone?: {
+    id: number;
+    title: string;
+    description?: string | null;
+    state: string;
+    due_date?: string | null;
+  } | null;
+}
+
+export interface GitLabMergeRequestListPage {
+  mergeRequests: GitLabMergeRequestListItem[];
   total: number | null;
 }
 
@@ -165,7 +223,7 @@ class GitLabApiService {
   private handleError(error: AxiosError): void {
     if (error.response) {
       logger.error('GitLab API Error Response', {
-        status: error.response.status,
+      status: error.response.status,
         data: error.response.data,
         url: error.config?.url,
       });
@@ -178,6 +236,104 @@ class GitLabApiService {
       logger.error('GitLab API Request Setup Error', {
         message: error.message,
       });
+    }
+  }
+
+  private getHeaderValue(headers: AxiosResponse['headers'], name: string): string | undefined {
+    const lower = name.toLowerCase();
+    const raw = headers[lower];
+    if (raw == null) return undefined;
+    if (Array.isArray(raw)) return raw[0];
+    return String(raw);
+  }
+
+  private getHeaderInt(headers: AxiosResponse['headers'], name: string): number | null {
+    const v = this.getHeaderValue(headers, name);
+    if (v === undefined || v === '') return null;
+    const n = parseInt(v, 10);
+    return Number.isNaN(n) ? null : n;
+  }
+
+  private parseLastPageFromLink(linkHeader: string | undefined): number | null {
+    if (!linkHeader) return null;
+    for (const part of linkHeader.split(',')) {
+      if (!/rel=["']last["']/i.test(part)) continue;
+      const m = part.match(/[?&]page=(\d+)/i);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        return Number.isNaN(n) ? null : n;
+      }
+    }
+    return null;
+  }
+
+  private parseCollectionTotal(
+    headers: AxiosResponse['headers'],
+    rowCount: number,
+    page: number,
+    perPage: number
+  ): number | null {
+    for (const key of ['x-total', 'x-total-count']) {
+      const xt = this.getHeaderInt(headers, key);
+      if (xt != null && xt >= 0) return xt;
+    }
+
+    const totalPages = this.getHeaderInt(headers, 'x-total-pages');
+    const headerPage = this.getHeaderInt(headers, 'x-page');
+    const headerPer = this.getHeaderInt(headers, 'x-per-page') ?? perPage;
+    if (totalPages != null && headerPage != null && totalPages > 0 && headerPer > 0) {
+      if (headerPage === totalPages) {
+        return (totalPages - 1) * headerPer + rowCount;
+      }
+    }
+    return null;
+  }
+
+  private async resolveCollectionTotal(params: {
+    projectPath: string;
+    resourceUrl: string;
+    baseParams: Record<string, string | number | boolean>;
+    firstRows: unknown[];
+    headers: AxiosResponse['headers'];
+    page: number;
+    perPage: number;
+  }): Promise<number | null> {
+    const { projectPath, resourceUrl, baseParams, firstRows, headers, page, perPage } = params;
+    let total = this.parseCollectionTotal(headers, firstRows.length, page, perPage);
+    if (total != null) return total;
+    if (firstRows.length < perPage) {
+      return (page - 1) * perPage + firstRows.length;
+    }
+
+    const totalPages = this.getHeaderInt(headers, 'x-total-pages');
+    const link = this.getHeaderValue(headers, 'link');
+    const lastPage = totalPages ?? this.parseLastPageFromLink(link);
+    if (lastPage == null || lastPage < 1) {
+      logger.warn('GitLab list could not infer total count; proxy may strip pagination headers', {
+        projectPath,
+        resourceUrl,
+      });
+      return null;
+    }
+
+    try {
+      const lastResp = await this.client.get<unknown[]>(resourceUrl, {
+        params: {
+          ...baseParams,
+          page: lastPage,
+          per_page: perPage,
+        },
+      });
+      const lastLen = Array.isArray(lastResp.data) ? lastResp.data.length : 0;
+      return (lastPage - 1) * perPage + lastLen;
+    } catch (error: unknown) {
+      logger.warn('GitLab last-page fetch for total failed', {
+        projectPath,
+        resourceUrl,
+        lastPage,
+        error: error instanceof Error ? error.message : 'Unknown',
+      });
+      return null;
     }
   }
 
@@ -259,26 +415,27 @@ class GitLabApiService {
         perPage,
       });
 
-      const response = await this.client.get<GitLabCommitResponse[]>(
-        `/projects/${encodeURIComponent(projectPath)}/repository/commits`,
-        {
-          params: {
-            page,
-            per_page: perPage,
-            all: true,
-            with_stats: true,
-          },
-        }
-      );
+      const resourceUrl = `/projects/${encodeURIComponent(projectPath)}/repository/commits`;
+      const baseParams: Record<string, string | number | boolean> = {
+        page,
+        per_page: perPage,
+        all: true,
+        with_stats: true,
+      };
 
-      const rawTotal = response.headers['x-total'];
-      let total: number | null = null;
-      if (rawTotal !== undefined && rawTotal !== '') {
-        const parsed = parseInt(String(rawTotal), 10);
-        if (!Number.isNaN(parsed)) {
-          total = parsed;
-        }
-      }
+      const response = await this.client.get<GitLabCommitResponse[]>(resourceUrl, {
+        params: baseParams,
+      });
+
+      const total = await this.resolveCollectionTotal({
+        projectPath,
+        resourceUrl,
+        baseParams,
+        firstRows: response.data,
+        headers: response.headers,
+        page,
+        perPage,
+      });
 
       return { commits: response.data, total };
     } catch (error) {
@@ -306,29 +463,44 @@ class GitLabApiService {
     return commits;
   }
 
-  async listProjectPipelines(
+  async listProjectPipelinesPage(
     projectPath: string,
     page: number = 1,
-    perPage: number = 100
-  ): Promise<GitLabPipelineResponse[]> {
+    perPage: number = 100,
+    status?: string
+  ): Promise<GitLabPipelineListPage> {
     try {
       logger.debug('Fetching project pipelines from GitLab', {
         projectPath,
         page,
         perPage,
+        status,
       });
 
-      const response = await this.client.get<GitLabPipelineResponse[]>(
-        `/projects/${encodeURIComponent(projectPath)}/pipelines`,
-        {
-          params: {
-            page,
-            per_page: perPage,
-          },
-        }
-      );
+      const resourceUrl = `/projects/${encodeURIComponent(projectPath)}/pipelines`;
+      const baseParams: Record<string, string | number | boolean> = {
+        page,
+        per_page: perPage,
+      };
+      if (status) {
+        baseParams.status = status;
+      }
 
-      return response.data;
+      const response = await this.client.get<GitLabPipelineResponse[]>(resourceUrl, {
+        params: baseParams,
+      });
+
+      const total = await this.resolveCollectionTotal({
+        projectPath,
+        resourceUrl,
+        baseParams,
+        firstRows: response.data,
+        headers: response.headers,
+        page,
+        perPage,
+      });
+
+      return { pipelines: response.data, total };
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const message = error.response?.data?.message || error.message;
@@ -340,6 +512,73 @@ class GitLabApiService {
           perPage,
         });
         throw new AppError(`GitLab project pipelines fetch failed: ${message}`, error.response?.status || 500);
+      }
+      throw error;
+    }
+  }
+
+  async listProjectPipelines(
+    projectPath: string,
+    page: number = 1,
+    perPage: number = 100
+  ): Promise<GitLabPipelineResponse[]> {
+    const { pipelines } = await this.listProjectPipelinesPage(projectPath, page, perPage);
+    return pipelines;
+  }
+
+  async listProjectMergeRequestsPage(
+    projectPath: string,
+    page: number = 1,
+    perPage: number = 100,
+    state?: string,
+    search?: string
+  ): Promise<GitLabMergeRequestListPage> {
+    try {
+      logger.debug('Fetching project merge requests from GitLab', {
+        projectPath,
+        page,
+        perPage,
+        state,
+      });
+
+      const resourceUrl = `/projects/${encodeURIComponent(projectPath)}/merge_requests`;
+      const baseParams: Record<string, string | number | boolean> = {
+        page,
+        per_page: perPage,
+      };
+      if (state) {
+        baseParams.state = state;
+      }
+      if (search?.trim()) {
+        baseParams.search = search.trim();
+      }
+
+      const response = await this.client.get<GitLabMergeRequestListItem[]>(resourceUrl, {
+        params: baseParams,
+      });
+
+      const total = await this.resolveCollectionTotal({
+        projectPath,
+        resourceUrl,
+        baseParams,
+        firstRows: response.data,
+        headers: response.headers,
+        page,
+        perPage,
+      });
+
+      return { mergeRequests: response.data, total };
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message = error.response?.data?.message || error.message;
+        logger.error('Failed to fetch project merge requests from GitLab', {
+          error: message,
+          status: error.response?.status,
+          projectPath,
+          page,
+          perPage,
+        });
+        throw new AppError(`GitLab merge requests fetch failed: ${message}`, error.response?.status || 500);
       }
       throw error;
     }

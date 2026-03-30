@@ -107,3 +107,31 @@ export async function getUniquelyMappedSprintRepoIds(projectIds: string[]): Prom
   const mappings = await getUniqueSprintRepoProjectMappings(projectIds);
   return mappings.map((mapping) => mapping.sprintRepoId);
 }
+
+/**
+ * All sprint repo IDs linked to the given Codex projects via active mappings
+ * (not restricted to globally one-to-one project/repo pairs).
+ */
+export async function getActiveSprintRepoIdsForProjects(projectIds: string[]): Promise<string[]> {
+  const normalizedProjectIds = getUniqueStringIds(projectIds);
+  if (normalizedProjectIds.length === 0) {
+    return [];
+  }
+
+  const projectValues = buildMixedIdValues(normalizedProjectIds);
+  const docs = await ProjectSprintRepoMapping.find({
+    isActive: true,
+    projectId: { $in: projectValues },
+  })
+    .select('sprintRepoId')
+    .lean();
+
+  const ids = new Set<string>();
+  for (const doc of docs) {
+    const sid = (doc as { sprintRepoId?: unknown }).sprintRepoId;
+    if (sid != null) {
+      ids.add(typeof sid === 'string' ? sid : String(sid));
+    }
+  }
+  return Array.from(ids);
+}

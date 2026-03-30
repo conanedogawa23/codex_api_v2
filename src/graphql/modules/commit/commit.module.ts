@@ -193,7 +193,9 @@ export const commitModule = createModule({
           await requireProjectAccess(context, projectId, 'gitlab');
           const { total } = await gitlabApi.listProjectCommitsPage(projectId, 1, 1);
           if (total === null) {
-            logger.warn('GitLab commits list missing x-total header; returning 0', { projectId });
+            logger.warn('GitLab commit total still unknown after header and last-page resolution', {
+              projectId,
+            });
           }
           return total ?? 0;
         }

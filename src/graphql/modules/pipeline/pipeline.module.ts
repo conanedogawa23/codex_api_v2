@@ -4,6 +4,54 @@ import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 import { requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
+import { gitlabApi, type GitLabPipelineResponse } from '../../../utils/gitlabApi';
+
+const PIPELINE_STATUS_FALLBACK = 'pending';
+
+const normalizePipelineStatus = (raw: string | undefined): string => {
+  if (!raw) return PIPELINE_STATUS_FALLBACK;
+  const s = raw.toLowerCase();
+  const allowed = new Set([
+    'created',
+    'waiting_for_resource',
+    'preparing',
+    'pending',
+    'running',
+    'success',
+    'failed',
+    'canceled',
+    'skipped',
+    'manual',
+    'scheduled',
+  ]);
+  return allowed.has(s) ? s : PIPELINE_STATUS_FALLBACK;
+};
+
+const mapGitLabPipelineToPipeline = (row: GitLabPipelineResponse, projectId: string) => {
+  const now = new Date();
+  return {
+    id: `live-pl-${row.id}`,
+    gitlabId: row.id,
+    projectId,
+    ref: row.ref ?? '',
+    sha: row.sha ?? '',
+    status: normalizePipelineStatus(row.status),
+    source: row.source ?? '',
+    beforeSha: row.before_sha ?? undefined,
+    tag: Boolean(row.tag),
+    webUrl: row.web_url ?? '',
+    duration: row.duration ?? undefined,
+    queuedDuration: row.queued_duration ?? undefined,
+    coverage: row.coverage ?? undefined,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    startedAt: row.started_at ? new Date(row.started_at) : undefined,
+    finishedAt: row.finished_at ? new Date(row.finished_at) : undefined,
+    committedAt: row.committed_at ? new Date(row.committed_at) : undefined,
+    lastSyncedAt: now,
+    isDeleted: false,
+  };
+};
 
 export const pipelineModule = createModule({
   id: 'pipeline',
@@ -50,6 +98,11 @@ export const pipelineModule = createModule({
       totalCount: Int!
     }
 
+    enum PipelineSource {
+      DATABASE
+      LIVE
+    }
+
     extend type Query {
       pipeline(id: ID!): Pipeline
       pipelineByGitlabId(gitlabId: Int!): Pipeline
@@ -60,7 +113,13 @@ export const pipelineModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Pipeline!]!
-      pipelinesByProject(projectId: String!, status: PipelineStatus, limit: Int = 20, offset: Int = 0): PipelinesByProjectResult!
+      pipelinesByProject(
+        projectId: String!
+        status: PipelineStatus
+        limit: Int = 20
+        offset: Int = 0
+        source: PipelineSource = DATABASE
+      ): PipelinesByProjectResult!
     }
   `,
   resolvers: {
@@ -115,10 +174,40 @@ export const pipelineModule = createModule({
 
       pipelinesByProject: async (
         _: any,
-        { projectId, status, limit = 20, offset = 0 }: { projectId: string; status?: string; limit: number; offset: number },
+        {
+          projectId,
+          status,
+          limit = 20,
+          offset = 0,
+          source = 'DATABASE',
+        }: { projectId: string; status?: string; limit: number; offset: number; source?: 'DATABASE' | 'LIVE' },
         context: GraphQLContext
       ) => {
         requireCurrentUser(context);
+        logger.info('pipelinesByProject', { projectId, status, limit, offset, source });
+
+        if (source === 'LIVE') {
+          await requireProjectAccess(context, projectId, 'gitlab');
+          if (limit <= 0) {
+            return { pipelines: [], totalCount: 0 };
+          }
+          const perPage = Math.min(limit, 100);
+          const page = Math.floor(offset / perPage) + 1;
+          const withinPageStart = offset - (page - 1) * perPage;
+          const statusParam = status ? String(status).toLowerCase() : undefined;
+          const { pipelines: rows, total } = await gitlabApi.listProjectPipelinesPage(
+            projectId,
+            page,
+            perPage,
+            statusParam
+          );
+          const sliced = rows.slice(withinPageStart, withinPageStart + limit);
+          return {
+            pipelines: sliced.map((row) => mapGitLabPipelineToPipeline(row, projectId)),
+            totalCount: total ?? 0,
+          };
+        }
+
         const filter: any = { projectId };
         if (status) filter.status = status;
         const scopedFilter = await withProjectFilter(context, filter, 'projectId', 'gitlab');
