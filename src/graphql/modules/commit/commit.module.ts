@@ -96,6 +96,11 @@ export const commitModule = createModule({
       LIVE
     }
 
+    enum CommitActivitySource {
+      DATABASE
+      LIVE
+    }
+
     extend type Query {
       commit(sha: String!): Commit
       commits(
@@ -117,6 +122,7 @@ export const commitModule = createModule({
         status: ProjectStatus
         priority: ProjectPriority
         recentOnly: Boolean = false
+        source: CommitActivitySource = DATABASE
       ): ProjectsWithCommitActivityResult!
     }
   `,
@@ -263,6 +269,7 @@ export const commitModule = createModule({
           status,
           priority,
           recentOnly = false,
+          source = 'DATABASE',
         }: {
           username: string;
           days: number;
@@ -273,10 +280,12 @@ export const commitModule = createModule({
           status?: string;
           priority?: string;
           recentOnly?: boolean;
+          source?: 'DATABASE' | 'LIVE';
         },
         context: GraphQLContext
       ) => {
         const currentUser = requireCurrentUser(context);
+        const liveBatchSize = 8;
         logger.info('Fetching projects with commit activity', {
           username,
           days,
@@ -287,21 +296,19 @@ export const commitModule = createModule({
           status,
           priority,
           recentOnly,
+          source,
           userId: currentUser.userId,
           userRole: currentUser.role,
           isSuperAdmin: currentUser.isSuperAdmin,
         });
         
         try {
-          // Find user by username to get their email
           const user = await User.findOne({ username }).select('email').lean();
           const authorEmail = user?.email || username;
-          
-          // Calculate date threshold from the days parameter
+
           const dateThreshold = new Date();
           dateThreshold.setDate(dateThreshold.getDate() - days);
-          
-          // Apply RBAC: determine which projects the caller can access
+
           const projectFilter: any = { isActive: true };
           const accessibleProjects = await getContextAccessibleProjectIds(context);
 
@@ -318,44 +325,88 @@ export const commitModule = createModule({
             projectFilter._id = { $in: accessibleProjects.projectIds };
           }
 
-          // Run commit aggregation and project fetch in parallel
-          const [commitActivity, allProjects] = await Promise.all([
-            // Aggregate commits by project for this user within the date range
-            Commit.aggregate([
-              {
-                $match: {
-                  $or: [
-                    { authorEmail },
-                    { authorName: username }
-                  ],
-                  authoredDate: { $gte: dateThreshold },
-                  isDeleted: false
-                }
-              },
-              {
-                $group: {
-                  _id: '$projectId',
-                  commitCount: { $sum: 1 },
-                  lastCommitDate: { $max: '$authoredDate' }
-                }
-              }
-            ]),
-            // Get accessible active projects
-            Project.find(projectFilter)
+          let allProjects: any[];
+          let commitActivityMap: Map<
+            string,
+            { commitCount: number; lastCommitDate: Date | null }
+          >;
+
+          if (source === 'LIVE') {
+            allProjects = await Project.find(projectFilter)
               .sort({ lastActivityAt: -1 })
-              .lean()
-          ]);
-          
-          // Create a map for quick lookup (Commit.projectId is a string matching project.gitlabId)
-          const commitActivityMap = new Map(
-            commitActivity.map((activity: any) => [
-              activity._id.toString(),
-              {
-                commitCount: activity.commitCount,
-                lastCommitDate: activity.lastCommitDate
-              }
-            ])
-          );
+              .lean();
+
+            commitActivityMap = new Map();
+            const sinceIso = dateThreshold.toISOString();
+            const gitlabAuthor =
+              typeof authorEmail === 'string' && authorEmail.includes('@')
+                ? authorEmail
+                : username;
+
+            for (let i = 0; i < allProjects.length; i += liveBatchSize) {
+              const batch = allProjects.slice(i, i + liveBatchSize);
+              await Promise.all(
+                batch.map(async (project: any) => {
+                  const gid = project.gitlabId;
+                  if (gid == null) {
+                    return;
+                  }
+                  const key = String(gid);
+                  try {
+                    const { commits, total } = await gitlabApi.listProjectCommitsPage(
+                      key,
+                      1,
+                      100,
+                      { since: sinceIso, author: gitlabAuthor }
+                    );
+                    const commitCount = total ?? commits.length;
+                    const lastCommitDate =
+                      commits[0]?.authored_date != null
+                        ? new Date(commits[0].authored_date)
+                        : null;
+                    commitActivityMap.set(key, { commitCount, lastCommitDate });
+                  } catch (error: unknown) {
+                    logger.warn('Live commit activity GitLab fetch failed for project', {
+                      gitlabId: key,
+                      username,
+                      error: error instanceof Error ? error.message : 'Unknown',
+                    });
+                    commitActivityMap.set(key, { commitCount: 0, lastCommitDate: null });
+                  }
+                })
+              );
+            }
+          } else {
+            const [commitActivity, projects] = await Promise.all([
+              Commit.aggregate([
+                {
+                  $match: {
+                    $or: [{ authorEmail }, { authorName: username }],
+                    authoredDate: { $gte: dateThreshold },
+                    isDeleted: false,
+                  },
+                },
+                {
+                  $group: {
+                    _id: '$projectId',
+                    commitCount: { $sum: 1 },
+                    lastCommitDate: { $max: '$authoredDate' },
+                  },
+                },
+              ]),
+              Project.find(projectFilter).sort({ lastActivityAt: -1 }).lean(),
+            ]);
+            allProjects = projects;
+            commitActivityMap = new Map(
+              commitActivity.map((activity: any) => [
+                activity._id.toString(),
+                {
+                  commitCount: activity.commitCount,
+                  lastCommitDate: activity.lastCommitDate,
+                },
+              ])
+            );
+          }
 
           const searchRegex = search?.trim()
             ? new RegExp(escapeRegex(search.trim()), 'i')

@@ -80,6 +80,13 @@ export interface GitLabCommitListPage {
   total: number | null;
 }
 
+/** Optional filters for GET .../repository/commits (GitLab API). */
+export interface GitLabCommitListFilters {
+  since?: string;
+  until?: string;
+  author?: string;
+}
+
 export interface GitLabPipelineListPage {
   pipelines: GitLabPipelineResponse[];
   total: number | null;
@@ -406,13 +413,15 @@ class GitLabApiService {
   async listProjectCommitsPage(
     projectPath: string,
     page: number = 1,
-    perPage: number = 100
+    perPage: number = 100,
+    listFilters?: GitLabCommitListFilters
   ): Promise<GitLabCommitListPage> {
     try {
       logger.debug('Fetching project commits from GitLab', {
         projectPath,
         page,
         perPage,
+        listFilters,
       });
 
       const resourceUrl = `/projects/${encodeURIComponent(projectPath)}/repository/commits`;
@@ -422,6 +431,15 @@ class GitLabApiService {
         all: true,
         with_stats: true,
       };
+      if (listFilters?.since) {
+        baseParams.since = listFilters.since;
+      }
+      if (listFilters?.until) {
+        baseParams.until = listFilters.until;
+      }
+      if (listFilters?.author) {
+        baseParams.author = listFilters.author;
+      }
 
       const response = await this.client.get<GitLabCommitResponse[]>(resourceUrl, {
         params: baseParams,
