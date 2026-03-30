@@ -474,7 +474,7 @@ export const analyticsModule = createModule({
         context: GraphQLContext
       ) => {
         try {
-          const { projectIds, accessRole, department } = await getScopedReportingProjectIds(
+          const { projectIds } = await getScopedReportingProjectIds(
             context,
             projectId
           );
@@ -545,14 +545,6 @@ export const analyticsModule = createModule({
               },
             },
           ];
-
-          if (accessRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN) {
-            resourcePipeline.push({
-              $match: {
-                department,
-              },
-            });
-          }
 
           if (trimmedSearch) {
             const escapedSearch = escapeRegex(trimmedSearch);
