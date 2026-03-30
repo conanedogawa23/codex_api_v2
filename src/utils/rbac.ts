@@ -50,8 +50,6 @@ export interface ContextAccessibleSprintReposResult {
   sprintRepoIds: string[];
 }
 
-const IMPOSSIBLE_ACCESS_VALUE = '__rbac_no_access__';
-
 function normalizeDepartmentName(value?: string | null): string {
   return value?.trim() || '';
 }
@@ -493,7 +491,7 @@ export const withProjectFilter = async (
 
   return mergeFilterWithConstraint(filter, {
     [projectField]: {
-      $in: accessibleValues.length > 0 ? accessibleValues : [IMPOSSIBLE_ACCESS_VALUE],
+      $in: accessibleValues,
     },
   });
 };
@@ -537,10 +535,7 @@ export const withSprintRepoFilter = async (
   const accessibleSprintRepos = await getContextAccessibleSprintRepoIds(context);
   return mergeFilterWithConstraint(filter, {
     [sprintRepoField]: {
-      $in:
-        accessibleSprintRepos.sprintRepoIds.length > 0
-          ? toMongoIdValues(accessibleSprintRepos.sprintRepoIds)
-          : [IMPOSSIBLE_ACCESS_VALUE],
+      $in: toMongoIdValues(accessibleSprintRepos.sprintRepoIds),
     },
   });
 };

@@ -13,25 +13,15 @@ import {
   requireProjectAccess,
   withSprintRepoFilter,
 } from '../../../utils/rbac';
+import {
+  buildMixedIdValues,
+  buildTaskScopeFilter,
+  getUniqueSprintRepoProjectMappings,
+} from '../../../utils/taskProjectScope';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-function buildProjectIdInValues(projectIds: string[]): any[] {
-  const values: any[] = [];
-
-  for (const projectId of projectIds) {
-    values.push(projectId);
-    if (mongoose.Types.ObjectId.isValid(projectId)) {
-      values.push(new mongoose.Types.ObjectId(projectId));
-    }
-  }
-
-  return values;
-}
-
-const IMPOSSIBLE_ANALYTICS_PROJECT_ID = '__rbac_no_analytics__';
 
 async function getScopedProjectIds(
   context: GraphQLContext,
@@ -49,9 +39,7 @@ async function getScopedProjectIds(
   }
 
   const accessibleProjects = await getContextAccessibleProjectIds(context);
-  return accessibleProjects.projectIds.length > 0
-    ? accessibleProjects.projectIds
-    : [IMPOSSIBLE_ANALYTICS_PROJECT_ID];
+  return accessibleProjects.projectIds;
 }
 
 async function getScopedReportingProjectIds(
@@ -84,13 +72,78 @@ async function getScopedReportingProjectIds(
 
   const accessibleProjects = await getContextAccessibleProjectIds(context);
   return {
-    projectIds:
-      accessibleProjects.projectIds.length > 0
-        ? accessibleProjects.projectIds
-        : [IMPOSSIBLE_ANALYTICS_PROJECT_ID],
+    projectIds: accessibleProjects.projectIds,
     accessRole,
     department: currentUser.department,
   };
+}
+
+function createEmptyTaskStatusAnalytics() {
+  return {
+    overview: [] as Array<{ status: string; count: number }>,
+    distribution: [] as Array<{ name: string; value: number; color: string }>,
+    byPriority: [] as Array<{ priority: string; count: number }>,
+    byAssignee: [] as Array<{
+      assigneeId: string;
+      assigneeName: string;
+      count: number;
+      completed: number;
+      inProgress: number;
+      pending: number;
+    }>,
+  };
+}
+
+function createEmptyResourceAllocationAnalytics() {
+  return {
+    hoursLoggedByResource: [] as Array<{ userId: string; userName: string; totalHours: number }>,
+    allocationStatus: [] as Array<{ status: string; count: number; percentage: number }>,
+    resources: [] as Array<{
+      userId: string;
+      userName: string;
+      email: string;
+      department: string;
+      totalTasks: number;
+      completedTasks: number;
+      totalHours: number;
+      actualHours: number;
+    }>,
+    highUtilizationCount: 0,
+    totalHoursLogged: 0,
+    totalCount: 0,
+  };
+}
+
+async function buildScopedTaskMatch(projectIds: string[] | null): Promise<Record<string, unknown> | null> {
+  if (projectIds === null) {
+    return null;
+  }
+
+  const sprintRepoMappings = await getUniqueSprintRepoProjectMappings(projectIds);
+  return buildTaskScopeFilter(
+    projectIds,
+    sprintRepoMappings.map((mapping) => mapping.sprintRepoId)
+  );
+}
+
+function mergeProjectTaskStats(
+  statsByProject: Map<string, { total: number; completed: number; estimatedHours: number; actualHours: number }>,
+  projectId: string,
+  stats: { total: number; completed: number; estimatedHours: number; actualHours: number }
+) {
+  const existingStats = statsByProject.get(projectId) || {
+    total: 0,
+    completed: 0,
+    estimatedHours: 0,
+    actualHours: 0,
+  };
+
+  existingStats.total += stats.total;
+  existingStats.completed += stats.completed;
+  existingStats.estimatedHours += stats.estimatedHours;
+  existingStats.actualHours += stats.actualHours;
+
+  statsByProject.set(projectId, existingStats);
 }
 
 export const analyticsModule = createModule({
@@ -240,10 +293,16 @@ export const analyticsModule = createModule({
         context: GraphQLContext
       ) => {
         try {
+          const emptyAnalytics = createEmptyTaskStatusAnalytics();
           const filter: any = { isActive: true };
           const scopedProjectIds = await getScopedProjectIds(context, projectId);
-          if (scopedProjectIds) {
-            filter.projectId = { $in: buildProjectIdInValues(scopedProjectIds) };
+          if (scopedProjectIds && scopedProjectIds.length === 0) {
+            return emptyAnalytics;
+          }
+
+          const scopedTaskMatch = await buildScopedTaskMatch(scopedProjectIds);
+          if (scopedTaskMatch) {
+            Object.assign(filter, scopedTaskMatch);
           }
           if (sprintId) filter.sprintId = sprintId;
 
@@ -419,13 +478,18 @@ export const analyticsModule = createModule({
             context,
             projectId
           );
+          if (projectIds && projectIds.length === 0) {
+            return createEmptyResourceAllocationAnalytics();
+          }
+
           const taskMatch: any = {
             isActive: true,
             'assignedTo.id': { $exists: true, $ne: null },
           };
 
-          if (projectIds) {
-            taskMatch.projectId = { $in: buildProjectIdInValues(projectIds) };
+          const scopedTaskMatch = await buildScopedTaskMatch(projectIds);
+          if (scopedTaskMatch) {
+            Object.assign(taskMatch, scopedTaskMatch);
           }
 
           const trimmedSearch = search?.trim();
@@ -609,8 +673,17 @@ export const analyticsModule = createModule({
           const { projectIds } = await getScopedReportingProjectIds(context);
           const trimmedSearch = search?.trim();
 
+          if (projectIds && projectIds.length === 0) {
+            return {
+              completionData: [],
+              timeComparison: [],
+              projects: [],
+              totalCount: 0,
+            };
+          }
+
           if (projectIds) {
-            projectFilter._id = { $in: buildProjectIdInValues(projectIds) };
+            projectFilter._id = { $in: buildMixedIdValues(projectIds) };
           }
 
           if (budgetOnly) {
@@ -631,11 +704,11 @@ export const analyticsModule = createModule({
             .lean();
 
           const matchingProjectIds = matchingProjects.map((project: any) => project._id.toString());
-          const taskStats = matchingProjectIds.length > 0
+          const directTaskStats = matchingProjectIds.length > 0
             ? await Task.aggregate([
                 {
                   $match: {
-                    projectId: { $in: buildProjectIdInValues(matchingProjectIds) },
+                    projectId: { $in: buildMixedIdValues(matchingProjectIds) },
                     isActive: true,
                   },
                 },
@@ -653,9 +726,54 @@ export const analyticsModule = createModule({
               ])
             : [];
 
-          const taskStatsByProject = new Map(
-            taskStats.map((item: any) => [String(item._id), item])
-          );
+          const taskStatsByProject = new Map<string, {
+            total: number;
+            completed: number;
+            estimatedHours: number;
+            actualHours: number;
+          }>();
+
+          for (const taskStat of directTaskStats) {
+            mergeProjectTaskStats(taskStatsByProject, String(taskStat._id), taskStat);
+          }
+
+          const uniqueSprintRepoMappings = await getUniqueSprintRepoProjectMappings(matchingProjectIds);
+          if (uniqueSprintRepoMappings.length > 0) {
+            const sprintRepoIds = uniqueSprintRepoMappings.map((mapping) => mapping.sprintRepoId);
+            const sprintRepoToProjectId = new Map(
+              uniqueSprintRepoMappings.map((mapping) => [mapping.sprintRepoId, mapping.projectId])
+            );
+
+            const legacyTaskStats = await Task.aggregate([
+              {
+                $match: {
+                  isActive: true,
+                  sprintRepoId: { $in: buildMixedIdValues(sprintRepoIds) },
+                  projectId: { $nin: buildMixedIdValues(matchingProjectIds) },
+                },
+              },
+              {
+                $group: {
+                  _id: '$sprintRepoId',
+                  total: { $sum: 1 },
+                  completed: {
+                    $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+                  },
+                  estimatedHours: { $sum: { $ifNull: ['$estimatedHours', 0] } },
+                  actualHours: { $sum: { $ifNull: ['$actualHours', 0] } },
+                },
+              },
+            ]);
+
+            for (const legacyTaskStat of legacyTaskStats) {
+              const projectIdForSprintRepo = sprintRepoToProjectId.get(String(legacyTaskStat._id));
+              if (!projectIdForSprintRepo) {
+                continue;
+              }
+
+              mergeProjectTaskStats(taskStatsByProject, projectIdForSprintRepo, legacyTaskStat);
+            }
+          }
 
           const allProjectDetails = matchingProjects.map((project: any) => {
             const projectId = project._id.toString();
@@ -665,17 +783,21 @@ export const analyticsModule = createModule({
               estimatedHours: 0,
               actualHours: 0,
             };
+            const completion = projectTaskStats.total > 0
+              ? (projectTaskStats.completed / projectTaskStats.total) * 100
+              : project.progress || 0;
 
             return {
               projectId,
               projectName: project.name,
               status: project.status || 'planned',
-              progress: project.progress || 0,
+              progress: Math.round(completion),
               tasksTotal: projectTaskStats.total,
               tasksCompleted: projectTaskStats.completed,
               estimatedHours: projectTaskStats.estimatedHours,
               actualHours: projectTaskStats.actualHours,
               budgetAllocated: project.budget?.allocated || 0,
+              completion,
             };
           });
 
@@ -684,7 +806,7 @@ export const analyticsModule = createModule({
           const completionData = allProjectDetails.map((project: any) => ({
             projectId: project.projectId,
             projectName: project.projectName,
-            completion: project.progress,
+            completion: project.completion,
             tasksCompleted: project.tasksCompleted,
             tasksTotal: project.tasksTotal,
             budgetAllocated: project.budgetAllocated,
@@ -727,6 +849,14 @@ export const analyticsModule = createModule({
         try {
           const filter: any = { isDeleted: false };
           const scopedProjectIds = await getScopedProjectIds(context, projectId);
+          if (scopedProjectIds && scopedProjectIds.length === 0) {
+            return {
+              successRate: 0,
+              totalPipelines: 0,
+              byStatus: [],
+            };
+          }
+
           if (scopedProjectIds) {
             filter.projectId = { $in: scopedProjectIds };
           }

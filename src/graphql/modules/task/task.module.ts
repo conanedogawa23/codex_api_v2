@@ -6,22 +6,16 @@ import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { canMutateTasks } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
-import { getContextAccessibleProjectIds, requireProjectAccess } from '../../../utils/rbac';
-
-/**
- * Build an array of projectId values (both String and ObjectId) for $in queries.
- * Handles mixed ObjectId/String storage in the tasks collection.
- */
-const buildProjectIdInValues = (projectIds: string[]): any[] => {
-  const values: any[] = [];
-  for (const pid of projectIds) {
-    values.push(pid);
-    if (mongoose.Types.ObjectId.isValid(pid)) {
-      values.push(new mongoose.Types.ObjectId(pid));
-    }
-  }
-  return values;
-};
+import {
+  getContextAccessibleProjectIds,
+  requireProjectAccess,
+  requireSprintRepoAccess,
+} from '../../../utils/rbac';
+import {
+  buildMixedIdValues,
+  buildTaskScopeFilter,
+  getUniquelyMappedSprintRepoIds,
+} from '../../../utils/taskProjectScope';
 
 const appendAndFilter = (query: Record<string, any>, condition: Record<string, any>): void => {
   query.$and = query.$and || [];
@@ -34,15 +28,17 @@ const getTaskProjectAccess = async (context: GraphQLContext) => {
   if (accessibleProjects.isSuperAdmin) {
     return {
       projectIds: [] as string[],
+      sprintRepoIds: [] as string[],
       projectFilter: null as Record<string, any> | null,
     };
   }
 
+  const sprintRepoIds = await getUniquelyMappedSprintRepoIds(accessibleProjects.projectIds);
+
   return {
     projectIds: accessibleProjects.projectIds,
-    projectFilter: {
-      projectId: { $in: buildProjectIdInValues(accessibleProjects.projectIds) },
-    },
+    sprintRepoIds,
+    projectFilter: buildTaskScopeFilter(accessibleProjects.projectIds, sprintRepoIds),
   };
 };
 
@@ -56,6 +52,50 @@ async function requireTaskMutationAccess(
   }
 
   await requireProjectAccess(context, projectId);
+  return currentUser;
+}
+
+async function requireTaskReadAccess(
+  context: GraphQLContext,
+  task: { projectId?: string | null; sprintRepoId?: { toString(): string } | string | null }
+) {
+  const projectId = task.projectId ? String(task.projectId) : null;
+  const sprintRepoId = task.sprintRepoId
+    ? (typeof task.sprintRepoId === 'string' ? task.sprintRepoId : task.sprintRepoId.toString())
+    : null;
+
+  if (!projectId && sprintRepoId) {
+    await requireSprintRepoAccess(context, sprintRepoId);
+    return;
+  }
+
+  if (!projectId) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  const canFallbackToSprintRepo = Boolean(sprintRepoId) && projectId === sprintRepoId;
+
+  try {
+    await requireProjectAccess(context, projectId);
+  } catch (error) {
+    if (!canFallbackToSprintRepo || !sprintRepoId) {
+      throw error;
+    }
+
+    await requireSprintRepoAccess(context, sprintRepoId);
+  }
+}
+
+async function requireTaskRecordMutationAccess(
+  context: GraphQLContext,
+  task: { projectId?: string | null; sprintRepoId?: { toString(): string } | string | null }
+) {
+  const currentUser = requireCurrentUser(context);
+  if (!canMutateTasks(currentUser.accessRole, currentUser.isSuperAdmin)) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  await requireTaskReadAccess(context, task);
   return currentUser;
 }
 
@@ -393,7 +433,7 @@ export const taskModule = createModule({
           throw new AppError('Task not found', 404);
         }
 
-        await requireProjectAccess(context, task.projectId);
+        await requireTaskReadAccess(context, task);
         return task;
       },
 
@@ -403,7 +443,7 @@ export const taskModule = createModule({
         if (!task) {
           throw new AppError('Task not found', 404);
         }
-        await requireProjectAccess(context, task.projectId);
+        await requireTaskReadAccess(context, task);
         logger.info(`Fetched task details for task ${taskId}`);
         return task;
       },
@@ -429,14 +469,12 @@ export const taskModule = createModule({
 
         // projectId is stored as both ObjectId and String in DB
         if (projectId) {
-          appendAndFilter(filter, {
-            $or: [
-              { projectId: projectId },
-              ...(mongoose.Types.ObjectId.isValid(projectId)
-                ? [{ projectId: new mongoose.Types.ObjectId(projectId) }]
-                : [])
-            ]
-          });
+          await requireProjectAccess(context, projectId);
+          const sprintRepoIds = await getUniquelyMappedSprintRepoIds([projectId]);
+          appendAndFilter(
+            filter,
+            buildTaskScopeFilter([projectId], sprintRepoIds) as Record<string, any>
+          );
         }
         // Convert GraphQL enum (uppercase underscore) to DB format (lowercase hyphen)
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
@@ -469,19 +507,16 @@ export const taskModule = createModule({
       ) => {
         requireCurrentUser(context);
         await requireProjectAccess(context, projectId);
+        const sprintRepoIds = await getUniquelyMappedSprintRepoIds([projectId]);
 
         // Use raw collection to handle mixed ObjectId/String projectId
         const db = mongoose.connection.db;
         const tasksCollection = db.collection('tasks');
-        const filter: any = {
-          isActive: true,
-          $or: [
-            { projectId: projectId },
-            ...(mongoose.Types.ObjectId.isValid(projectId)
-              ? [{ projectId: new mongoose.Types.ObjectId(projectId) }]
-              : [])
-          ]
-        };
+        const filter: any = { isActive: true };
+        appendAndFilter(
+          filter,
+          buildTaskScopeFilter([projectId], sprintRepoIds) as Record<string, any>
+        );
         // Convert GraphQL enum to DB format
         if (status) filter.status = status.toLowerCase().replace(/_/g, '-');
 
@@ -529,14 +564,12 @@ export const taskModule = createModule({
 
         // Handle mixed ObjectId/String projectId
         if (filter.projectId) {
-          appendAndFilter(query, {
-            $or: [
-              { projectId: filter.projectId },
-              ...(mongoose.Types.ObjectId.isValid(filter.projectId)
-                ? [{ projectId: new mongoose.Types.ObjectId(filter.projectId) }]
-                : [])
-            ]
-          });
+          await requireProjectAccess(context, filter.projectId);
+          const sprintRepoIds = await getUniquelyMappedSprintRepoIds([filter.projectId]);
+          appendAndFilter(
+            query,
+            buildTaskScopeFilter([filter.projectId], sprintRepoIds) as Record<string, any>
+          );
         }
         if (filter.status) {
           if (Array.isArray(filter.status)) {
@@ -594,14 +627,11 @@ export const taskModule = createModule({
 
         // Apply non-status filters for status summary (project, assignee, etc.)
         if (filter.projectId) {
-          appendAndFilter(baseQuery, {
-            $or: [
-              { projectId: filter.projectId },
-              ...(mongoose.Types.ObjectId.isValid(filter.projectId)
-                ? [{ projectId: new mongoose.Types.ObjectId(filter.projectId) }]
-                : [])
-            ]
-          });
+          const sprintRepoIds = await getUniquelyMappedSprintRepoIds([filter.projectId]);
+          appendAndFilter(
+            baseQuery,
+            buildTaskScopeFilter([filter.projectId], sprintRepoIds) as Record<string, any>
+          );
         }
         if (filter.assignedTo) {
           appendAndFilter(baseQuery, {
@@ -665,27 +695,27 @@ export const taskModule = createModule({
         try {
           requireCurrentUser(context);
           const taskAccess = await getTaskProjectAccess(context);
-          let rbacFilter: any = {};
+          const query: any = { isActive: true };
           if (taskAccess.projectFilter) {
             if (taskAccess.projectIds.length === 0) {
               return [];
             }
-            rbacFilter = taskAccess.projectFilter;
+            appendAndFilter(query, taskAccess.projectFilter);
           }
 
           // Handle both ObjectId and string types for sprintId
-          const sprintObjectId = mongoose.Types.ObjectId.isValid(sprintId) 
-            ? new mongoose.Types.ObjectId(sprintId) 
+          const sprintObjectId = mongoose.Types.ObjectId.isValid(sprintId)
+            ? new mongoose.Types.ObjectId(sprintId)
             : null;
-          
-          return await Task.find({
+
+          appendAndFilter(query, {
             $or: [
-              { sprintId: sprintId },
-              { sprintId: sprintObjectId }
+              { sprintId },
+              ...(sprintObjectId ? [{ sprintId: sprintObjectId }] : []),
             ],
-            isActive: true,
-            ...rbacFilter,
-          })
+          });
+
+          return await Task.find(query)
             .sort({ sprintOrder: 1, createdAt: 1 })
             .limit(limit)
             .lean();
@@ -703,15 +733,21 @@ export const taskModule = createModule({
         try {
           requireCurrentUser(context);
           await requireProjectAccess(context, projectId);
+          const sprintRepoIds = await getUniquelyMappedSprintRepoIds([projectId]);
+          const filter: any = { isActive: true };
 
-          return await Task.find({
-            projectId,
-            isActive: true,
+          appendAndFilter(
+            filter,
+            buildTaskScopeFilter([projectId], sprintRepoIds) as Record<string, any>
+          );
+          appendAndFilter(filter, {
             $or: [
               { sprintId: { $exists: false } },
               { sprintId: null }
             ]
-          })
+          });
+
+          return await Task.find(filter)
             .sort({ priority: -1, createdAt: 1 })
             .limit(limit)
             .lean();
@@ -736,16 +772,27 @@ export const taskModule = createModule({
           }
 
           await requireProjectAccess(context, projectId);
+          const uniqueSprintRepoIds = await getUniquelyMappedSprintRepoIds([projectId]);
+          const filter: any = { isActive: true };
+          const legacyScopedSprintRepoIds = uniqueSprintRepoIds.includes(sprintRepoId)
+            ? [sprintRepoId]
+            : [];
 
-          return await Task.find({
-            projectId,
-            sprintRepoId,
-            isActive: true,
+          appendAndFilter(
+            filter,
+            buildTaskScopeFilter([projectId], legacyScopedSprintRepoIds) as Record<string, any>
+          );
+          appendAndFilter(filter, {
+            sprintRepoId: { $in: buildMixedIdValues([sprintRepoId]) }
+          });
+          appendAndFilter(filter, {
             $or: [
               { sprintId: { $exists: false } },
               { sprintId: null }
             ]
-          })
+          });
+
+          return await Task.find(filter)
             .sort({ priority: -1, createdAt: 1 })
             .limit(limit)
             .lean();
@@ -797,7 +844,7 @@ export const taskModule = createModule({
           throw new AppError('Task not found', 404);
         }
 
-        await requireTaskMutationAccess(context, existingTask.projectId);
+        await requireTaskRecordMutationAccess(context, existingTask);
 
         // Convert GraphQL enum values to DB format
         const dbInput = { ...input };
@@ -851,7 +898,7 @@ export const taskModule = createModule({
           throw new AppError('Task not found', 404);
         }
 
-        await requireTaskMutationAccess(context, existingTask.projectId);
+        await requireTaskRecordMutationAccess(context, existingTask);
 
         const task = await Task.findByIdAndUpdate(id, { isActive: false }, { new: true });
         if (!task) {
@@ -871,7 +918,7 @@ export const taskModule = createModule({
           throw new AppError('Task not found', 404);
         }
 
-        await requireTaskMutationAccess(context, existingTask.projectId);
+        await requireTaskRecordMutationAccess(context, existingTask);
 
         const updateData: any = {
           status: 'completed',
@@ -904,7 +951,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, existingTask.projectId);
+          await requireTaskRecordMutationAccess(context, existingTask);
 
           const updateData: any = { sprintId };
           if (sprintOrder !== undefined) {
@@ -940,7 +987,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, existingTask.projectId);
+          await requireTaskRecordMutationAccess(context, existingTask);
 
           const task = await Task.findByIdAndUpdate(
             taskId,
@@ -971,7 +1018,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, existingTask.projectId);
+          await requireTaskRecordMutationAccess(context, existingTask);
 
           const task = await Task.findByIdAndUpdate(
             taskId,
@@ -1002,7 +1049,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, existingTask.projectId);
+          await requireTaskRecordMutationAccess(context, existingTask);
 
           const task = await Task.findByIdAndUpdate(
             taskId,
@@ -1033,7 +1080,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, task.projectId);
+          await requireTaskRecordMutationAccess(context, task);
 
           // Validate file size (5MB limit for base64)
           const maxSize = 5 * 1024 * 1024; // 5MB in bytes
@@ -1068,7 +1115,7 @@ export const taskModule = createModule({
             throw new AppError('Task not found', 404);
           }
 
-          await requireTaskMutationAccess(context, task.projectId);
+          await requireTaskRecordMutationAccess(context, task);
 
           await task.removeAttachment(attachmentName);
 
