@@ -7,12 +7,47 @@ import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 import { getContextAccessibleProjectIds, requireProjectAccess, withProjectFilter } from '../../../utils/rbac';
+import { gitlabApi, type GitLabCommitResponse } from '../../../utils/gitlabApi';
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const normalizeProjectEnumValue = (value?: string, fallback?: string): string =>
   (value || fallback || '').replace(/-/g, '_').toUpperCase();
+
+const mapGitLabCommitToCommit = (row: GitLabCommitResponse, projectId: string) => {
+  const authored = new Date(row.authored_date);
+  const committed = new Date(row.committed_date);
+  const createdAt = row.created_at ? new Date(row.created_at) : authored;
+  const stats = row.stats
+    ? {
+        additions: row.stats.additions ?? 0,
+        deletions: row.stats.deletions ?? 0,
+        total: row.stats.total ?? 0,
+      }
+    : undefined;
+
+  return {
+    id: row.id,
+    sha: row.id,
+    projectId,
+    shortId: row.short_id,
+    title: row.title ?? '',
+    message: row.message ?? '',
+    authorName: row.author_name ?? '',
+    authorEmail: row.author_email ?? '',
+    authoredDate: authored,
+    committerName: row.committer_name ?? '',
+    committerEmail: row.committer_email ?? '',
+    committedDate: committed,
+    webUrl: row.web_url ?? '',
+    parentIds: row.parent_ids ?? [],
+    stats,
+    lastSyncedAt: new Date(),
+    isDeleted: false,
+    createdAt,
+  };
+};
 
 export const commitModule = createModule({
   id: 'commit',
@@ -56,10 +91,20 @@ export const commitModule = createModule({
       totalCount: Int!
     }
 
+    enum CommitSource {
+      DATABASE
+      LIVE
+    }
+
     extend type Query {
       commit(sha: String!): Commit
-      commits(projectId: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
-      commitCount(projectId: String!): Int!
+      commits(
+        projectId: String!
+        limit: Int = 20
+        offset: Int = 0
+        source: CommitSource = DATABASE
+      ): [Commit!]!
+      commitCount(projectId: String!, source: CommitSource = DATABASE): Int!
       commitsByProject(projectId: String!, limit: Int = 20): [Commit!]!
       commitsByAuthor(authorEmail: String!, limit: Int = 20, offset: Int = 0): [Commit!]!
       projectsWithCommitActivity(
@@ -98,18 +143,37 @@ export const commitModule = createModule({
 
       commits: async (
         _: any,
-        { projectId, limit, offset }: { projectId: string; limit: number; offset: number },
+        {
+          projectId,
+          limit,
+          offset,
+          source = 'DATABASE',
+        }: { projectId: string; limit: number; offset: number; source?: 'DATABASE' | 'LIVE' },
         context: GraphQLContext
       ) => {
         requireCurrentUser(context);
-        logger.info('Fetching commits', { projectId, limit, offset });
+        logger.info('Fetching commits', { projectId, limit, offset, source });
+
+        if (source === 'LIVE') {
+          await requireProjectAccess(context, projectId, 'gitlab');
+          if (limit <= 0) {
+            return [];
+          }
+          const perPage = Math.min(limit, 100);
+          const page = Math.floor(offset / perPage) + 1;
+          const withinPageStart = offset - (page - 1) * perPage;
+          const { commits: rows } = await gitlabApi.listProjectCommitsPage(projectId, page, perPage);
+          const sliced = rows.slice(withinPageStart, withinPageStart + limit);
+          return sliced.map((row) => mapGitLabCommitToCommit(row, projectId));
+        }
+
         const filter = await withProjectFilter(
           context,
           { projectId, isDeleted: false },
           'projectId',
           'gitlab'
         );
-        
+
         return await Commit.find(filter)
           .limit(limit)
           .skip(offset)
@@ -119,11 +183,21 @@ export const commitModule = createModule({
 
       commitCount: async (
         _: any,
-        { projectId }: { projectId: string },
+        { projectId, source = 'DATABASE' }: { projectId: string; source?: 'DATABASE' | 'LIVE' },
         context: GraphQLContext
       ) => {
         requireCurrentUser(context);
-        logger.info('Counting commits', { projectId });
+        logger.info('Counting commits', { projectId, source });
+
+        if (source === 'LIVE') {
+          await requireProjectAccess(context, projectId, 'gitlab');
+          const { total } = await gitlabApi.listProjectCommitsPage(projectId, 1, 1);
+          if (total === null) {
+            logger.warn('GitLab commits list missing x-total header; returning 0', { projectId });
+          }
+          return total ?? 0;
+        }
+
         const filter = await withProjectFilter(
           context,
           { projectId, isDeleted: false },

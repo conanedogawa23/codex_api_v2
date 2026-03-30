@@ -75,6 +75,11 @@ interface GitLabCommitResponse {
   };
 }
 
+export interface GitLabCommitListPage {
+  commits: GitLabCommitResponse[];
+  total: number | null;
+}
+
 interface GitLabPipelineResponse {
   id: number;
   iid: number;
@@ -242,11 +247,11 @@ class GitLabApiService {
     }
   }
 
-  async listProjectCommits(
+  async listProjectCommitsPage(
     projectPath: string,
     page: number = 1,
     perPage: number = 100
-  ): Promise<GitLabCommitResponse[]> {
+  ): Promise<GitLabCommitListPage> {
     try {
       logger.debug('Fetching project commits from GitLab', {
         projectPath,
@@ -266,7 +271,16 @@ class GitLabApiService {
         }
       );
 
-      return response.data;
+      const rawTotal = response.headers['x-total'];
+      let total: number | null = null;
+      if (rawTotal !== undefined && rawTotal !== '') {
+        const parsed = parseInt(String(rawTotal), 10);
+        if (!Number.isNaN(parsed)) {
+          total = parsed;
+        }
+      }
+
+      return { commits: response.data, total };
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const message = error.response?.data?.message || error.message;
@@ -281,6 +295,15 @@ class GitLabApiService {
       }
       throw error;
     }
+  }
+
+  async listProjectCommits(
+    projectPath: string,
+    page: number = 1,
+    perPage: number = 100
+  ): Promise<GitLabCommitResponse[]> {
+    const { commits } = await this.listProjectCommitsPage(projectPath, page, perPage);
+    return commits;
   }
 
   async listProjectPipelines(
