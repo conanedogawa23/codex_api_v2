@@ -576,6 +576,9 @@ input UpdateUserInput {
   department: String
   status: UserStatus
   skills: [String!]
+  zohoSprintsUserId: String
+  zohoSprintsRoleId: String
+  zohoSprintsProfileId: String
 }
 
 input CreateUserInput {

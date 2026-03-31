@@ -46,6 +46,7 @@ export const sprintRepoModule = createModule({
       status: SprintRepoStatus!
       zohoProjectId: String
       source: String
+      zohoMetadata: JSON
       startDate: DateTime
       endDate: DateTime
       duration: Int

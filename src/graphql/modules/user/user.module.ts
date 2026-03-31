@@ -284,6 +284,9 @@ export const userModule = createModule({
       department: String
       status: UserStatus
       skills: [String!]
+      zohoSprintsUserId: String
+      zohoSprintsRoleId: String
+      zohoSprintsProfileId: String
     }
 
     input CreateUserInput {
@@ -643,6 +646,17 @@ export const userModule = createModule({
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = normalizeUserStatus(dbInput.status);
         if (dbInput.accessRole) dbInput.accessRole = normalizeAccessRole(dbInput.accessRole);
+
+        const zohoIntegrationKeys = ['zohoSprintsUserId', 'zohoSprintsRoleId', 'zohoSprintsProfileId'] as const;
+        const wantsZohoIntegrationUpdate = zohoIntegrationKeys.some((key) => Object.prototype.hasOwnProperty.call(input, key));
+        if (wantsZohoIntegrationUpdate && !currentUser.isSuperAdmin) {
+          throw new AppError('Only super admins can update Zoho Sprints integration fields', 403);
+        }
+        for (const key of zohoIntegrationKeys) {
+          if (dbInput[key] === '') {
+            dbInput[key] = undefined;
+          }
+        }
 
         const existingUser = await User.findById(id);
         if (!existingUser) {
