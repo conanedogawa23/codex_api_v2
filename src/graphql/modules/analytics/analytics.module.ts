@@ -1,9 +1,11 @@
 import { createModule, gql } from 'graphql-modules';
 import mongoose from 'mongoose';
+import { Department } from '../../../models/Department';
 import { Task } from '../../../models/Task';
 import { Project } from '../../../models/Project';
 import { Sprint } from '../../../models/Sprint';
 import { Pipeline } from '../../../models/Pipeline';
+import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { ACCESS_ROLE, normalizeAccessRole, PERMISSION } from '../../../utils/accessControl';
@@ -20,8 +22,129 @@ import {
   getUniqueSprintRepoProjectMappings,
 } from '../../../utils/taskProjectScope';
 
+type AnalyticsDepartmentMemberUser = {
+  _id: { toString(): string };
+  gitlabId?: number | null;
+  name?: string | null;
+  email?: string | null;
+  department?: string | null;
+  role?: string | null;
+  isActive?: boolean;
+  userSource?: string;
+  userType?: string;
+};
+
+type DepartmentResourceUser = {
+  userId: string;
+  aliasIds: string[];
+  userName: string;
+  email: string;
+  department: string;
+  jobRole: string;
+};
+
+const ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER = {
+  isActive: true,
+  $or: [
+    { userType: 'human' },
+    { userType: { $exists: false }, userSource: 'manual' },
+  ],
+};
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildDepartmentMemberAliases(user: AnalyticsDepartmentMemberUser): string[] {
+  const aliases = [user._id.toString()];
+
+  if (user.gitlabId !== undefined && user.gitlabId !== null) {
+    aliases.push(user.gitlabId.toString());
+  }
+
+  return aliases;
+}
+
+function isEligibleAnalyticsDepartmentMember(
+  user: AnalyticsDepartmentMemberUser | null | undefined
+): user is AnalyticsDepartmentMemberUser {
+  if (!user || user.isActive === false) {
+    return false;
+  }
+
+  if (user.userType) {
+    return user.userType === 'human';
+  }
+
+  return user.userSource === 'manual';
+}
+
+async function resolveDepartmentResourceUsers(
+  departmentName: string
+): Promise<DepartmentResourceUser[]> {
+  const normalizedDepartment = departmentName.trim();
+  if (!normalizedDepartment) {
+    return [];
+  }
+
+  const department = await Department.findOne({ name: normalizedDepartment, isActive: true })
+    .select('members')
+    .lean();
+
+  const memberIdentifiers = Array.isArray(department?.members)
+    ? department.members
+        .map((identifier) => String(identifier ?? '').trim())
+        .filter((identifier) => identifier.length > 0)
+    : [];
+
+  let users: AnalyticsDepartmentMemberUser[] = [];
+
+  if (memberIdentifiers.length > 0) {
+    const objectIds = memberIdentifiers
+      .filter((identifier) => mongoose.Types.ObjectId.isValid(identifier))
+      .map((identifier) => new mongoose.Types.ObjectId(identifier));
+    const gitlabIds = memberIdentifiers
+      .filter((identifier) => /^\d+$/.test(identifier))
+      .map((identifier) => Number(identifier));
+
+    const userFilters: Record<string, unknown>[] = [];
+    if (objectIds.length > 0) {
+      userFilters.push({ _id: { $in: objectIds } });
+    }
+    if (gitlabIds.length > 0) {
+      userFilters.push({ gitlabId: { $in: gitlabIds } });
+    }
+
+    if (userFilters.length > 0) {
+      users = await User.find({
+        ...(userFilters.length === 1 ? userFilters[0] : { $or: userFilters }),
+        ...ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER,
+      })
+        .select('_id gitlabId name email department role isActive userSource userType')
+        .lean();
+    }
+  }
+
+  if (users.length === 0) {
+    users = await User.find({
+      department: normalizedDepartment,
+      ...ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER,
+    })
+      .select('_id gitlabId name email department role isActive userSource userType')
+      .lean();
+  }
+
+  return users
+    .filter(isEligibleAnalyticsDepartmentMember)
+    .map((user) => ({
+      userId: user._id.toString(),
+      aliasIds: buildDepartmentMemberAliases(user),
+      userName: user.name?.trim() || user.email?.trim() || user._id.toString(),
+      email: user.email?.trim() || '',
+      department: user.department?.trim() || normalizedDepartment,
+      jobRole: user.role?.trim() || 'Not set',
+    }))
+    .sort((left, right) => left.userName.localeCompare(right.userName));
 }
 
 async function getScopedProjectIds(
@@ -475,7 +598,8 @@ export const analyticsModule = createModule({
         context: GraphQLContext
       ) => {
         try {
-          const { projectIds } = await getScopedReportingProjectIds(
+          const currentUser = requireCurrentUser(context);
+          const { projectIds, accessRole, department } = await getScopedReportingProjectIds(
             context,
             projectId
           );
@@ -483,107 +607,265 @@ export const analyticsModule = createModule({
             return createEmptyResourceAllocationAnalytics();
           }
 
-          const taskMatch: any = {
-            isActive: true,
-            'assignedTo.id': { $exists: true, $ne: null },
-          };
-
-          const scopedTaskMatch = await buildScopedTaskMatch(projectIds);
-          if (scopedTaskMatch) {
-            Object.assign(taskMatch, scopedTaskMatch);
-          }
-
           const trimmedSearch = search?.trim();
-          const resourcePipeline: any[] = [
-            { $match: taskMatch },
-            {
-              $group: {
-                _id: '$assignedTo.id',
-                userName: { $first: '$assignedTo.name' },
-                email: { $first: '$assignedTo.email' },
-                totalTasks: { $sum: 1 },
-                completedTasks: {
-                  $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
-                },
-                totalHours: {
-                  $sum: { $ifNull: ['$estimatedHours', 0] },
-                },
-                actualHours: {
-                  $sum: { $ifNull: ['$actualHours', 0] },
+          const useDepartmentResourceScope =
+            !projectId &&
+            !currentUser.isSuperAdmin &&
+            accessRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN;
+
+          let resourceDetails: any[] = [];
+          let allocationAggregation: any[] = [];
+
+          if (useDepartmentResourceScope) {
+            const departmentUsers = await resolveDepartmentResourceUsers(department);
+            if (departmentUsers.length === 0) {
+              return createEmptyResourceAllocationAnalytics();
+            }
+
+            const memberAliasIds = Array.from(
+              new Set(departmentUsers.flatMap((user) => user.aliasIds))
+            );
+            const memberAliasValues = buildMixedIdValues(memberAliasIds);
+            const aliasToUser = new Map<string, DepartmentResourceUser>();
+            const userById = new Map<string, DepartmentResourceUser>();
+
+            departmentUsers.forEach((user) => {
+              userById.set(user.userId, user);
+              user.aliasIds.forEach((alias) => aliasToUser.set(alias, user));
+            });
+
+            const rawResourceDetails = await Task.aggregate([
+              {
+                $match: {
+                  isActive: true,
+                  'assignedTo.id': { $in: memberAliasValues },
                 },
               },
-            },
-            {
-              $lookup: {
-                from: 'users',
-                let: { assignedUserId: '$_id' },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $or: [
-                          { $eq: [{ $toString: '$_id' }, '$$assignedUserId'] },
-                          { $eq: [{ $toString: '$gitlabId' }, '$$assignedUserId'] },
-                        ],
+              {
+                $group: {
+                  _id: '$assignedTo.id',
+                  totalTasks: { $sum: 1 },
+                  completedTasks: {
+                    $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+                  },
+                  totalHours: {
+                    $sum: { $ifNull: ['$estimatedHours', 0] },
+                  },
+                  actualHours: {
+                    $sum: { $ifNull: ['$actualHours', 0] },
+                  },
+                },
+              },
+            ]);
+
+            const metricsByUserId = new Map<
+              string,
+              {
+                totalTasks: number;
+                completedTasks: number;
+                totalHours: number;
+                actualHours: number;
+              }
+            >();
+
+            rawResourceDetails.forEach((item: any) => {
+              const member = aliasToUser.get(String(item._id));
+              if (!member) {
+                return;
+              }
+
+              const existing = metricsByUserId.get(member.userId) || {
+                totalTasks: 0,
+                completedTasks: 0,
+                totalHours: 0,
+                actualHours: 0,
+              };
+
+              existing.totalTasks += item.totalTasks || 0;
+              existing.completedTasks += item.completedTasks || 0;
+              existing.totalHours += item.totalHours || 0;
+              existing.actualHours += item.actualHours || 0;
+              metricsByUserId.set(member.userId, existing);
+            });
+
+            resourceDetails = departmentUsers.map((user) => {
+              const metrics = metricsByUserId.get(user.userId) || {
+                totalTasks: 0,
+                completedTasks: 0,
+                totalHours: 0,
+                actualHours: 0,
+              };
+
+              return {
+                userId: user.userId,
+                userName: user.userName,
+                email: user.email,
+                department: user.department,
+                jobRole: user.jobRole,
+                totalTasks: metrics.totalTasks,
+                completedTasks: metrics.completedTasks,
+                totalHours: metrics.totalHours,
+                actualHours: metrics.actualHours,
+              };
+            });
+
+            if (trimmedSearch) {
+              const normalizedSearch = trimmedSearch.toLowerCase();
+              resourceDetails = resourceDetails.filter((item: any) =>
+                [item.userName, item.email, item.department, item.jobRole]
+                  .some((value) => String(value || '').toLowerCase().includes(normalizedSearch))
+              );
+            }
+
+            resourceDetails.sort(
+              (left, right) => right.totalTasks - left.totalTasks || left.userName.localeCompare(right.userName)
+            );
+
+            if (resourceDetails.length > 0) {
+              const filteredAliasIds = Array.from(
+                new Set(
+                  resourceDetails.flatMap((item: any) => userById.get(item.userId)?.aliasIds || [])
+                )
+              );
+
+              allocationAggregation = await Task.aggregate([
+                {
+                  $match: {
+                    isActive: true,
+                    'assignedTo.id': { $in: buildMixedIdValues(filteredAliasIds) },
+                  },
+                },
+                {
+                  $group: {
+                    _id: '$status',
+                    count: { $sum: 1 },
+                  },
+                },
+              ]);
+            }
+          } else {
+            const taskMatch: any = {
+              isActive: true,
+              'assignedTo.id': { $exists: true, $ne: null },
+            };
+
+            const scopedTaskMatch = await buildScopedTaskMatch(projectIds);
+            if (scopedTaskMatch) {
+              Object.assign(taskMatch, scopedTaskMatch);
+            }
+
+            const resourcePipeline: any[] = [
+              { $match: taskMatch },
+              {
+                $group: {
+                  _id: '$assignedTo.id',
+                  userName: { $first: '$assignedTo.name' },
+                  email: { $first: '$assignedTo.email' },
+                  totalTasks: { $sum: 1 },
+                  completedTasks: {
+                    $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+                  },
+                  totalHours: {
+                    $sum: { $ifNull: ['$estimatedHours', 0] },
+                  },
+                  actualHours: {
+                    $sum: { $ifNull: ['$actualHours', 0] },
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: 'users',
+                  let: { assignedUserId: '$_id' },
+                  pipeline: [
+                    {
+                      $match: {
+                        $expr: {
+                          $or: [
+                            { $eq: [{ $toString: '$_id' }, '$$assignedUserId'] },
+                            { $eq: [{ $toString: '$gitlabId' }, '$$assignedUserId'] },
+                          ],
+                        },
                       },
                     },
-                  },
-                  {
-                    $project: {
-                      department: 1,
-                      role: 1,
+                    {
+                      $project: {
+                        department: 1,
+                        role: 1,
+                      },
                     },
+                  ],
+                  as: 'userInfo',
+                },
+              },
+              {
+                $addFields: {
+                  userId: '$_id',
+                  department: {
+                    $ifNull: [{ $arrayElemAt: ['$userInfo.department', 0] }, 'Unknown'],
                   },
-                ],
-                as: 'userInfo',
-              },
-            },
-            {
-              $addFields: {
-                userId: '$_id',
-                department: {
-                  $ifNull: [{ $arrayElemAt: ['$userInfo.department', 0] }, 'Unknown'],
-                },
-                jobRole: {
-                  $ifNull: [{ $arrayElemAt: ['$userInfo.role', 0] }, 'Not set'],
+                  jobRole: {
+                    $ifNull: [{ $arrayElemAt: ['$userInfo.role', 0] }, 'Not set'],
+                  },
                 },
               },
-            },
-          ];
+            ];
 
-          if (trimmedSearch) {
-            const escapedSearch = escapeRegex(trimmedSearch);
-            resourcePipeline.push({
-              $match: {
-                $or: [
-                  { userName: { $regex: escapedSearch, $options: 'i' } },
-                  { email: { $regex: escapedSearch, $options: 'i' } },
-                  { department: { $regex: escapedSearch, $options: 'i' } },
-                  { jobRole: { $regex: escapedSearch, $options: 'i' } },
-                ],
+            if (trimmedSearch) {
+              const escapedSearch = escapeRegex(trimmedSearch);
+              resourcePipeline.push({
+                $match: {
+                  $or: [
+                    { userName: { $regex: escapedSearch, $options: 'i' } },
+                    { email: { $regex: escapedSearch, $options: 'i' } },
+                    { department: { $regex: escapedSearch, $options: 'i' } },
+                    { jobRole: { $regex: escapedSearch, $options: 'i' } },
+                  ],
+                },
+              });
+            }
+
+            resourcePipeline.push(
+              {
+                $project: {
+                  _id: 0,
+                  userId: 1,
+                  userName: 1,
+                  email: { $ifNull: ['$email', ''] },
+                  department: 1,
+                  jobRole: 1,
+                  totalTasks: 1,
+                  completedTasks: 1,
+                  totalHours: 1,
+                  actualHours: 1,
+                },
               },
-            });
+              { $sort: { totalTasks: -1, userName: 1 } }
+            );
+
+            resourceDetails = await Task.aggregate(resourcePipeline);
+
+            if (resourceDetails.length > 0) {
+              const allocationMatch: any = { ...taskMatch };
+
+              if (trimmedSearch) {
+                allocationMatch['assignedTo.id'] = {
+                  $in: resourceDetails.map((item: any) => item.userId),
+                };
+              }
+
+              allocationAggregation = await Task.aggregate([
+                { $match: allocationMatch },
+                {
+                  $group: {
+                    _id: '$status',
+                    count: { $sum: 1 },
+                  },
+                },
+              ]);
+            }
           }
 
-          resourcePipeline.push(
-            {
-              $project: {
-                _id: 0,
-                userId: 1,
-                userName: 1,
-                email: { $ifNull: ['$email', ''] },
-                department: 1,
-                jobRole: 1,
-                totalTasks: 1,
-                completedTasks: 1,
-                totalHours: 1,
-                actualHours: 1,
-              },
-            },
-            { $sort: { totalTasks: -1, userName: 1 } }
-          );
-
-          const resourceDetails = await Task.aggregate(resourcePipeline);
           const totalCount = resourceDetails.length;
           const paginatedResources = resourceDetails.slice(offset, offset + limit);
 
@@ -595,27 +877,6 @@ export const analyticsModule = createModule({
               userName: item.userName,
               totalHours: item.actualHours,
             }));
-
-          let allocationAggregation: any[] = [];
-          if (totalCount > 0) {
-            const allocationMatch: any = { ...taskMatch };
-
-            if (trimmedSearch) {
-              allocationMatch['assignedTo.id'] = {
-                $in: resourceDetails.map((item: any) => item.userId),
-              };
-            }
-
-            allocationAggregation = await Task.aggregate([
-              { $match: allocationMatch },
-              {
-                $group: {
-                  _id: '$status',
-                  count: { $sum: 1 },
-                },
-              },
-            ]);
-          }
 
           const totalTasks = allocationAggregation.reduce((sum: number, item: any) => sum + item.count, 0);
           const allocationStatus = allocationAggregation.map((item: any) => ({
