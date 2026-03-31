@@ -1,6 +1,5 @@
 import { createModule, gql } from 'graphql-modules';
 import mongoose from 'mongoose';
-import { Department } from '../../../models/Department';
 import { Task } from '../../../models/Task';
 import { Project } from '../../../models/Project';
 import { Sprint } from '../../../models/Sprint';
@@ -87,52 +86,12 @@ async function resolveDepartmentResourceUsers(
     return [];
   }
 
-  const department = await Department.findOne({ name: normalizedDepartment, isActive: true })
-    .select('members')
+  const users = await User.find({
+    department: normalizedDepartment,
+    ...ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER,
+  })
+    .select('_id gitlabId name email department role isActive userSource userType')
     .lean();
-
-  const memberIdentifiers = Array.isArray(department?.members)
-    ? department.members
-        .map((identifier) => String(identifier ?? '').trim())
-        .filter((identifier) => identifier.length > 0)
-    : [];
-
-  let users: AnalyticsDepartmentMemberUser[] = [];
-
-  if (memberIdentifiers.length > 0) {
-    const objectIds = memberIdentifiers
-      .filter((identifier) => mongoose.Types.ObjectId.isValid(identifier))
-      .map((identifier) => new mongoose.Types.ObjectId(identifier));
-    const gitlabIds = memberIdentifiers
-      .filter((identifier) => /^\d+$/.test(identifier))
-      .map((identifier) => Number(identifier));
-
-    const userFilters: Record<string, unknown>[] = [];
-    if (objectIds.length > 0) {
-      userFilters.push({ _id: { $in: objectIds } });
-    }
-    if (gitlabIds.length > 0) {
-      userFilters.push({ gitlabId: { $in: gitlabIds } });
-    }
-
-    if (userFilters.length > 0) {
-      users = await User.find({
-        ...(userFilters.length === 1 ? userFilters[0] : { $or: userFilters }),
-        ...ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER,
-      })
-        .select('_id gitlabId name email department role isActive userSource userType')
-        .lean();
-    }
-  }
-
-  if (users.length === 0) {
-    users = await User.find({
-      department: normalizedDepartment,
-      ...ACTIVE_HUMAN_ANALYTICS_MEMBER_FILTER,
-    })
-      .select('_id gitlabId name email department role isActive userSource userType')
-      .lean();
-  }
 
   return users
     .filter(isEligibleAnalyticsDepartmentMember)
@@ -622,6 +581,7 @@ export const analyticsModule = createModule({
               return createEmptyResourceAllocationAnalytics();
             }
 
+            const scopedTaskMatch = await buildScopedTaskMatch(projectIds);
             const memberAliasIds = Array.from(
               new Set(departmentUsers.flatMap((user) => user.aliasIds))
             );
@@ -639,6 +599,7 @@ export const analyticsModule = createModule({
                 $match: {
                   isActive: true,
                   'assignedTo.id': { $in: memberAliasValues },
+                  ...(scopedTaskMatch || {}),
                 },
               },
               {
@@ -733,6 +694,7 @@ export const analyticsModule = createModule({
                   $match: {
                     isActive: true,
                     'assignedTo.id': { $in: buildMixedIdValues(filteredAliasIds) },
+                    ...(scopedTaskMatch || {}),
                   },
                 },
                 {
