@@ -93,6 +93,55 @@ function requireUserVisibility(context: GraphQLContext, user: any) {
   return currentUser;
 }
 
+const ZOHO_SPRINTS_INTEGRATION_KEYS = [
+  'zohoSprintsUserId',
+  'zohoSprintsRoleId',
+  'zohoSprintsProfileId',
+] as const;
+
+function inputTouchesZohoSprintsIntegration(input: Record<string, unknown>): boolean {
+  return ZOHO_SPRINTS_INTEGRATION_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(input, key)
+  );
+}
+
+function assertSuperAdminCanMutateZohoSprintsIntegration(
+  currentUser: ReturnType<typeof requireCurrentUser>,
+  input: Record<string, unknown>
+): void {
+  if (inputTouchesZohoSprintsIntegration(input) && !currentUser.isSuperAdmin) {
+    throw new AppError('Only super admins can set Zoho Sprints integration fields', 403);
+  }
+}
+
+function normalizeZohoSprintsIntegrationOnUpdatePayload(dbInput: Record<string, unknown>): void {
+  for (const key of ZOHO_SPRINTS_INTEGRATION_KEYS) {
+    if (dbInput[key] === '') {
+      dbInput[key] = undefined;
+    }
+  }
+}
+
+function extractZohoSprintsIntegrationForNewUser(
+  input: Record<string, unknown>
+): Partial<Record<(typeof ZOHO_SPRINTS_INTEGRATION_KEYS)[number], string>> {
+  const out: Partial<Record<(typeof ZOHO_SPRINTS_INTEGRATION_KEYS)[number], string>> = {};
+  for (const key of ZOHO_SPRINTS_INTEGRATION_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) {
+      continue;
+    }
+    const raw = input[key];
+    if (raw === '' || raw === null || raw === undefined) {
+      continue;
+    }
+    const trimmed = String(raw).trim();
+    if (trimmed.length > 0) {
+      out[key] = trimmed;
+    }
+  }
+  return out;
+}
+
 export const userModule = createModule({
   id: 'user',
   typeDefs: gql`
@@ -298,6 +347,9 @@ export const userModule = createModule({
       status: UserStatus
       skills: [String!]
       assignedRepos: [String!]
+      zohoSprintsUserId: String
+      zohoSprintsRoleId: String
+      zohoSprintsProfileId: String
     }
 
     input UserFilterInput {
@@ -569,6 +621,8 @@ export const userModule = createModule({
     Mutation: {
       createUser: async (_: any, { input }: any, context: GraphQLContext) => {
         const currentUser = requireDepartmentUserAdmin(context, input.department);
+        assertSuperAdminCanMutateZohoSprintsIntegration(currentUser, input);
+
         const name = input.name?.trim();
         const email = input.email?.trim().toLowerCase();
         const role = input.role?.trim();
@@ -591,6 +645,8 @@ export const userModule = createModule({
         }
 
         const username = await generateUniqueUsername(buildBaseUsername(email));
+        const zohoSprintsIntegration = extractZohoSprintsIntegrationForNewUser(input);
+
         const user = new User({
           assignedRepos: input.assignedRepos || [],
           canSyncFromGitlab: false,
@@ -608,6 +664,7 @@ export const userModule = createModule({
           userSource: 'manual',
           userType: 'human',
           username,
+          ...zohoSprintsIntegration,
         });
 
         try {
@@ -629,6 +686,10 @@ export const userModule = createModule({
             if (error?.keyPattern?.username) {
               throw new AppError('A user with this username already exists', 409);
             }
+
+            if (error?.keyPattern?.zohoSprintsUserId) {
+              throw new AppError('A user with this Zoho Sprints user id already exists', 409);
+            }
           }
 
           logger.error('Failed to create manual user', {
@@ -647,16 +708,8 @@ export const userModule = createModule({
         if (dbInput.status) dbInput.status = normalizeUserStatus(dbInput.status);
         if (dbInput.accessRole) dbInput.accessRole = normalizeAccessRole(dbInput.accessRole);
 
-        const zohoIntegrationKeys = ['zohoSprintsUserId', 'zohoSprintsRoleId', 'zohoSprintsProfileId'] as const;
-        const wantsZohoIntegrationUpdate = zohoIntegrationKeys.some((key) => Object.prototype.hasOwnProperty.call(input, key));
-        if (wantsZohoIntegrationUpdate && !currentUser.isSuperAdmin) {
-          throw new AppError('Only super admins can update Zoho Sprints integration fields', 403);
-        }
-        for (const key of zohoIntegrationKeys) {
-          if (dbInput[key] === '') {
-            dbInput[key] = undefined;
-          }
-        }
+        assertSuperAdminCanMutateZohoSprintsIntegration(currentUser, input);
+        normalizeZohoSprintsIntegrationOnUpdatePayload(dbInput);
 
         const existingUser = await User.findById(id);
         if (!existingUser) {
@@ -685,11 +738,18 @@ export const userModule = createModule({
           assertPrivilegedAccessRoleWriteAllowed(currentUser, dbInput.accessRole);
         }
 
-        const user = await User.findByIdAndUpdate(id, dbInput, { new: true, runValidators: true });
-        if (!user) {
-          throw new AppError('User not found', 404);
+        try {
+          const user = await User.findByIdAndUpdate(id, dbInput, { new: true, runValidators: true });
+          if (!user) {
+            throw new AppError('User not found', 404);
+          }
+          return user;
+        } catch (error: any) {
+          if (error?.code === 11000 && error?.keyPattern?.zohoSprintsUserId) {
+            throw new AppError('A user with this Zoho Sprints user id already exists', 409);
+          }
+          throw error;
         }
-        return user;
       },
       addUserProject: async (_: any, { id, projectId, projectName, role }: any, context: GraphQLContext) => {
         const user = await User.findById(id);

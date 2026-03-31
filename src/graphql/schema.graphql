@@ -589,6 +589,9 @@ input CreateUserInput {
   status: UserStatus
   skills: [String!]
   assignedRepos: [String!]
+  zohoSprintsUserId: String
+  zohoSprintsRoleId: String
+  zohoSprintsProfileId: String
 }
 
 input UserFilterInput {
