@@ -6,10 +6,11 @@ import { Sprint } from '../../../models/Sprint';
 import { Pipeline } from '../../../models/Pipeline';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
-import { ACCESS_ROLE, normalizeAccessRole } from '../../../utils/accessControl';
+import { ACCESS_ROLE, normalizeAccessRole, PERMISSION } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import {
   getContextAccessibleProjectIds,
+  requirePermission,
   requireProjectAccess,
   withSprintRepoFilter,
 } from '../../../utils/rbac';
@@ -57,9 +58,7 @@ async function getScopedReportingProjectIds(
     };
   }
 
-  if (accessRole !== ACCESS_ROLE.CLUSTER_SUPER_ADMIN) {
-    throw new AppError('Forbidden', 403);
-  }
+  requirePermission(context, PERMISSION.VIEW_DEPARTMENT_RESOURCE_UTILIZATION);
 
   if (projectId) {
     await requireProjectAccess(context, projectId);
@@ -103,6 +102,7 @@ function createEmptyResourceAllocationAnalytics() {
       userName: string;
       email: string;
       department: string;
+      jobRole: string;
       totalTasks: number;
       completedTasks: number;
       totalHours: number;
@@ -214,6 +214,7 @@ export const analyticsModule = createModule({
       userName: String!
       email: String!
       department: String!
+      jobRole: String!
       totalTasks: Int!
       completedTasks: Int!
       totalHours: Float!
@@ -530,6 +531,7 @@ export const analyticsModule = createModule({
                   {
                     $project: {
                       department: 1,
+                      role: 1,
                     },
                   },
                 ],
@@ -541,6 +543,9 @@ export const analyticsModule = createModule({
                 userId: '$_id',
                 department: {
                   $ifNull: [{ $arrayElemAt: ['$userInfo.department', 0] }, 'Unknown'],
+                },
+                jobRole: {
+                  $ifNull: [{ $arrayElemAt: ['$userInfo.role', 0] }, 'Not set'],
                 },
               },
             },
@@ -554,6 +559,7 @@ export const analyticsModule = createModule({
                   { userName: { $regex: escapedSearch, $options: 'i' } },
                   { email: { $regex: escapedSearch, $options: 'i' } },
                   { department: { $regex: escapedSearch, $options: 'i' } },
+                  { jobRole: { $regex: escapedSearch, $options: 'i' } },
                 ],
               },
             });
@@ -567,6 +573,7 @@ export const analyticsModule = createModule({
                 userName: 1,
                 email: { $ifNull: ['$email', ''] },
                 department: 1,
+                jobRole: 1,
                 totalTasks: 1,
                 completedTasks: 1,
                 totalHours: 1,
@@ -641,6 +648,7 @@ export const analyticsModule = createModule({
               userName: item.userName,
               email: item.email,
               department: item.department,
+              jobRole: item.jobRole,
               totalTasks: item.totalTasks,
               completedTasks: item.completedTasks,
               totalHours: item.totalHours,
