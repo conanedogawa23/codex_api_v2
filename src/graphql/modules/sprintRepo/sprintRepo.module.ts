@@ -77,6 +77,7 @@ export const sprintRepoModule = createModule({
     input UpdateSprintRepoInput {
       name: String
       description: String
+      ownerId: String
       ownerName: String
       groupId: String
       groupName: String
@@ -396,6 +397,22 @@ export const sprintRepoModule = createModule({
           // Map status from GraphQL enum to database value
           if (input.status) {
             input.status = input.status.toLowerCase();
+          }
+
+          if (typeof input.ownerId === 'string') {
+            const normalizedOwnerId = input.ownerId.trim();
+            if (!normalizedOwnerId) {
+              throw new AppError('Owner ID cannot be empty', 400);
+            }
+            input.ownerId = normalizedOwnerId;
+          }
+
+          if (typeof input.ownerName === 'string') {
+            const normalizedOwnerName = input.ownerName.trim();
+            if (!normalizedOwnerName) {
+              throw new AppError('Owner name cannot be empty', 400);
+            }
+            input.ownerName = normalizedOwnerName;
           }
 
           const sprintRepo = await SprintRepo.findByIdAndUpdate(

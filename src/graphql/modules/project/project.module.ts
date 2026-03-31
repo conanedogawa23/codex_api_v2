@@ -249,6 +249,7 @@ export const projectModule = createModule({
     input UpdateProjectInput {
       name: String
       description: String
+      visibility: ProjectVisibility
       status: ProjectStatus
       priority: ProjectPriority
       progress: Int
@@ -293,6 +294,7 @@ export const projectModule = createModule({
         limit: Int = 20
         offset: Int = 0
       ): [Project!]!
+      projectCategories(department: String, limit: Int = 200): [String!]!
       projectsByNamespace(namespacePath: String!, limit: Int = 20): [Project!]!
       projectsByDepartment(department: String!): [Project!]!
     }
@@ -649,6 +651,47 @@ export const projectModule = createModule({
         return projects;
       },
 
+      projectCategories: async (
+        _: any,
+        { department, limit = 200 }: { department?: string; limit?: number },
+        context: GraphQLContext
+      ) => {
+        const currentUser = requireCurrentUser(context);
+        const normalizedDepartment = department?.trim();
+        const cappedLimit = Math.min(Math.max(limit || 200, 1), 200);
+        const filter: Record<string, unknown> = {
+          isActive: true,
+          category: { $exists: true, $ne: null },
+        };
+
+        logger.info('Project categories query received', {
+          userId: currentUser.userId,
+          accessRole: currentUser.accessRole,
+          isSuperAdmin: currentUser.isSuperAdmin,
+          department: normalizedDepartment,
+          limit: cappedLimit,
+        });
+
+        if (normalizedDepartment) {
+          filter.department = currentUser.isSuperAdmin
+            ? normalizedDepartment
+            : requireDepartmentScope(context, normalizedDepartment);
+        }
+
+        const scopedFilter = await withProjectFilter(context, filter, '_id');
+        const categories = await Project.distinct('category', scopedFilter);
+
+        return Array.from(
+          new Set(
+            categories
+              .map((value) => String(value ?? '').trim())
+              .filter((value) => value.length > 0)
+          )
+        )
+          .sort((left, right) => left.localeCompare(right))
+          .slice(0, cappedLimit);
+      },
+
       projectsByNamespace: async (
         _: any,
         { namespacePath, limit = 20 }: { namespacePath: string; limit: number },
@@ -860,6 +903,7 @@ export const projectModule = createModule({
         const dbInput = { ...input };
         if (dbInput.status) dbInput.status = dbInput.status.toLowerCase().replace(/_/g, '-');
         if (dbInput.priority) dbInput.priority = dbInput.priority.toLowerCase();
+        // Visibility edits are persisted in MongoDB only. GitLab remains source-managed elsewhere.
         if (dbInput.visibility) dbInput.visibility = dbInput.visibility.toLowerCase();
 
         if (dbInput.department) {

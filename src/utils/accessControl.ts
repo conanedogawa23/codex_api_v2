@@ -122,14 +122,24 @@ export function canManageDepartmentProjects(
   accessRole?: string | null,
   isSuperAdmin: boolean = false
 ): boolean {
-  return isSuperAdmin || normalizeAccessRole(accessRole) === ACCESS_ROLE.ADMIN;
+  const normalizedRole = normalizeAccessRole(accessRole);
+  return (
+    isSuperAdmin ||
+    normalizedRole === ACCESS_ROLE.ADMIN ||
+    normalizedRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN
+  );
 }
 
 export function canManageDepartmentSprints(
   accessRole?: string | null,
   isSuperAdmin: boolean = false
 ): boolean {
-  return isSuperAdmin || normalizeAccessRole(accessRole) === ACCESS_ROLE.ADMIN;
+  const normalizedRole = normalizeAccessRole(accessRole);
+  return (
+    isSuperAdmin ||
+    normalizedRole === ACCESS_ROLE.ADMIN ||
+    normalizedRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN
+  );
 }
 
 export function canMutateTasks(

@@ -12,7 +12,10 @@ import mongoose from 'mongoose';
 async function requireMappingManagement(
   context: GraphQLContext,
   projectId?: string | null,
-  sprintRepoId?: string | null
+  sprintRepoId?: string | null,
+  options?: {
+    requireSprintRepoAccess?: boolean;
+  }
 ) {
   const currentUser = requireCurrentUser(context);
   if (!canManageDepartmentSprints(currentUser.accessRole, currentUser.isSuperAdmin)) {
@@ -23,7 +26,7 @@ async function requireMappingManagement(
     await requireProjectAccess(context, projectId);
   }
 
-  if (sprintRepoId) {
+  if (sprintRepoId && options?.requireSprintRepoAccess !== false) {
     await requireSprintRepoAccess(context, sprintRepoId);
   }
 
@@ -295,7 +298,6 @@ export const projectSprintRepoMappingModule = createModule({
       ) => {
         try {
           const { projectId, sprintRepoId } = input;
-          await requireMappingManagement(context, projectId, sprintRepoId);
 
           // Validate IDs
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -316,6 +318,12 @@ export const projectSprintRepoMappingModule = createModule({
           if (!sprintRepo) {
             throw new AppError('SprintRepo not found', 404);
           }
+
+          // Allow admins to create the first association for a newly created sprint
+          // repo before it becomes visible through mapping-derived access checks.
+          await requireMappingManagement(context, projectId, sprintRepoId, {
+            requireSprintRepoAccess: false,
+          });
 
           // Check if mapping already exists
           const existingMapping = await ProjectSprintRepoMapping.findOne({
@@ -398,7 +406,6 @@ export const projectSprintRepoMappingModule = createModule({
       ) => {
         try {
           const { projectId, sprintRepoIds } = input;
-          await requireMappingManagement(context, projectId);
 
           // Validate project ID
           if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -426,9 +433,9 @@ export const projectSprintRepoMappingModule = createModule({
             throw new AppError('One or more sprintRepos not found', 404);
           }
 
-          for (const sprintRepoId of sprintRepoIds) {
-            await requireSprintRepoAccess(context, sprintRepoId);
-          }
+          await requireMappingManagement(context, projectId, null, {
+            requireSprintRepoAccess: false,
+          });
 
           const createdMappings: any[] = [];
           let createdCount = 0;
