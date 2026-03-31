@@ -20,6 +20,14 @@ export interface ISprintRepo extends Document {
   startDate?: Date;
   endDate?: Date;
   isActive: boolean;
+  zohoProjectId?: string;
+  source?: string;
+  zohoMetadata?: {
+    raw_data?: unknown;
+    itemTypes?: unknown[];
+    priorities?: unknown[];
+    statuses?: unknown[];
+  };
   createdAt: Date;
   updatedAt: Date;
 
@@ -80,6 +88,20 @@ const SprintRepoSchema: Schema = new Schema({
     type: Boolean,
     default: true,
     index: true
+  },
+  zohoProjectId: {
+    type: String,
+    index: true
+  },
+  source: {
+    type: String,
+    trim: true
+  },
+  zohoMetadata: {
+    raw_data: Schema.Types.Mixed,
+    itemTypes: [Schema.Types.Mixed],
+    priorities: [Schema.Types.Mixed],
+    statuses: [Schema.Types.Mixed]
   }
 }, {
   timestamps: true,
@@ -91,6 +113,7 @@ SprintRepoSchema.index({ key: 1 }, { unique: true });
 SprintRepoSchema.index({ ownerId: 1, status: 1 });
 SprintRepoSchema.index({ groupId: 1, status: 1 });
 SprintRepoSchema.index({ status: 1, isActive: 1 });
+SprintRepoSchema.index({ zohoProjectId: 1 });
 SprintRepoSchema.index({ name: 'text' }); // Text search on name
 
 // Virtual for duration

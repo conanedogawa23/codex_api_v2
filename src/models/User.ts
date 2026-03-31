@@ -35,6 +35,9 @@ export interface IUser extends Document {
   // User Source & Sync Control
   userSource: 'gitlab' | 'manual';
   externalId?: string;
+  zohoSprintsUserId?: string;
+  zohoSprintsRoleId?: string;
+  zohoSprintsProfileId?: string;
   canSyncFromGitlab: boolean;
   manuallyCreatedBy?: {
     userId: string;
@@ -281,6 +284,18 @@ const UserSchema: Schema = new Schema({
     sparse: true,
     index: true
   },
+  zohoSprintsUserId: {
+    type: String,
+    trim: true
+  },
+  zohoSprintsRoleId: {
+    type: String,
+    trim: true
+  },
+  zohoSprintsProfileId: {
+    type: String,
+    trim: true
+  },
   canSyncFromGitlab: {
     type: Boolean,
     default: true,
@@ -435,6 +450,7 @@ UserSchema.index({ lastSynced: 1 });
 UserSchema.index({ userSource: 1, email: 1 });
 UserSchema.index({ userSource: 1, status: 1 });
 UserSchema.index({ canSyncFromGitlab: 1 });
+UserSchema.index({ zohoSprintsUserId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ department: 1, userType: 1 });
 UserSchema.index({ accessRole: 1, department: 1 });
 UserSchema.index({ isSuperAdmin: 1 });
