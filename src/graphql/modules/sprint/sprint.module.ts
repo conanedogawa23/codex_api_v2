@@ -312,6 +312,8 @@ export const sprintModule = createModule({
         try {
           requireCurrentUser(context);
           const andConditions: Record<string, unknown>[] = [{ isActive: true }];
+          const db = mongoose.connection.db;
+          const sprintsCollection = db.collection('sprints');
 
           if (sprintRepoId) {
             if (!mongoose.Types.ObjectId.isValid(sprintRepoId)) {
@@ -319,7 +321,10 @@ export const sprintModule = createModule({
             }
 
             andConditions.push({
-              sprintRepoId: new mongoose.Types.ObjectId(sprintRepoId),
+              $or: [
+                { sprintRepoId },
+                { sprintRepoId: new mongoose.Types.ObjectId(sprintRepoId) },
+              ],
             });
           }
 
@@ -345,12 +350,13 @@ export const sprintModule = createModule({
           const scopedFilter = await withSprintRepoFilter(context, filter, 'sprintRepoId');
 
           const [sprints, totalCount] = await Promise.all([
-            Sprint.find(scopedFilter)
+            sprintsCollection
+              .find(scopedFilter)
               .sort({ startDate: -1 })
               .limit(limit)
               .skip(offset)
-              .lean(),
-            Sprint.countDocuments(scopedFilter),
+              .toArray(),
+            sprintsCollection.countDocuments(scopedFilter),
           ]);
 
           return {

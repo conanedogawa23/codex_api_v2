@@ -140,10 +140,24 @@ export const sprintRepoModule = createModule({
       },
       sprintCount: async (parent: any) => {
         try {
-          const count = await Sprint.countDocuments({ 
-            sprintRepoId: parent._id?.toString() || parent.id, 
-            isActive: true 
-          });
+          const sprintRepoId = parent._id?.toString() || parent.id;
+          if (!sprintRepoId) {
+            return 0;
+          }
+
+          // Sprint repo references may be stored as either ObjectId or string.
+          const db = mongoose.connection.db;
+          const sprintsCollection = db.collection('sprints');
+          const filter: any = {
+            isActive: true,
+            $or: [{ sprintRepoId }],
+          };
+
+          if (mongoose.Types.ObjectId.isValid(sprintRepoId)) {
+            filter.$or.push({ sprintRepoId: new mongoose.Types.ObjectId(sprintRepoId) });
+          }
+
+          const count = await sprintsCollection.countDocuments(filter);
           return count;
         } catch (error) {
           logger.error('Error counting sprints for sprint repo', { sprintRepoId: parent._id || parent.id, error });
