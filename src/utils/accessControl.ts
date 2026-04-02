@@ -41,6 +41,9 @@ const ROLE_PERMISSION_MAP: Record<AccessRole, Permission[]> = {
     PERMISSION.VIEW_DEPARTMENT_MEMBERS,
     PERMISSION.VIEW_DEPARTMENT_COST_REPORTS,
     PERMISSION.VIEW_DEPARTMENT_RESOURCE_UTILIZATION,
+    PERMISSION.MANAGE_DEPARTMENT_PROJECTS,
+    PERMISSION.MANAGE_DEPARTMENT_SPRINTS,
+    PERMISSION.MANAGE_DEPARTMENT_TASKS,
   ],
   [ACCESS_ROLE.FINANCE]: [
     PERMISSION.VIEW_DEPARTMENT_MEMBERS,
@@ -151,7 +154,11 @@ export function canMutateTasks(
   }
 
   const normalizedRole = normalizeAccessRole(accessRole);
-  return normalizedRole === ACCESS_ROLE.ADMIN || normalizedRole === ACCESS_ROLE.STANDARD_USER;
+  return (
+    normalizedRole === ACCESS_ROLE.ADMIN ||
+    normalizedRole === ACCESS_ROLE.CLUSTER_SUPER_ADMIN ||
+    normalizedRole === ACCESS_ROLE.STANDARD_USER
+  );
 }
 
 export function canViewDepartmentMembers(
