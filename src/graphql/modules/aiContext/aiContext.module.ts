@@ -1,7 +1,14 @@
 import { createModule, gql } from 'graphql-modules';
 import mongoose from 'mongoose';
 
+/**
+ * Phase 0 plugin decision: hybrid of (a) service auth + (b) scoped unauthenticated access.
+ * — Browser users: JWT cookie; `requireUserOrPluginService` passes via currentUser.
+ * — VS Code plugin: `X-Codex-Plugin-Token` must match `PLUGIN_GRAPHQL_SERVICE_TOKEN`;
+ *   `aiContext` then requires `projectId` (no global search) and caps `limit` (max 10).
+ */
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireUserOrPluginService } from '../../../utils/auth';
 import { Issue } from '../../../models/Issue';
 import { MergeRequest } from '../../../models/MergeRequest';
 import { Pipeline } from '../../../models/Pipeline';
@@ -62,8 +69,14 @@ export const aiContextModule = createModule({
     Query: {
       aiContext: async (
         _: unknown,
-        args: { limit?: number; projectId?: string; query: string }
+        args: { limit?: number; projectId?: string; query: string },
+        context: GraphQLContext
       ) => {
+        requireUserOrPluginService(context);
+        if (context.pluginServiceAuthenticated && !args.projectId?.trim()) {
+          throw new AppError('projectId is required', 400);
+        }
+
         const limit = Math.min(Math.max(args.limit || 5, 1), 10);
         const normalizedQuery = args.query.trim();
         if (!normalizedQuery) {
@@ -138,6 +151,8 @@ export const aiContextModule = createModule({
             pipelineCount: pipelines.length,
             projectId: args.projectId,
             query: normalizedQuery,
+            actorUserId: context.currentUser?.userId ?? null,
+            pluginService: context.pluginServiceAuthenticated,
           });
 
           return {

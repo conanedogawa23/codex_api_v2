@@ -1,6 +1,9 @@
+import { parse as parseCookie } from 'cookie';
+import type { Request, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
 
 import { environment } from '../config/environment';
+import { getSessionCookieName } from '../config/sessionCookie';
 import { AppError } from '../middleware';
 import { User } from '../models/User';
 import {
@@ -9,6 +12,7 @@ import {
   getPermissionsForAccessRole,
   normalizeAccessRole,
 } from './accessControl';
+import { logger } from './logger';
 
 export interface AuthenticatedUser {
   userId: string;
@@ -23,12 +27,10 @@ export interface AuthenticatedUser {
 }
 
 export interface GraphQLContext {
-  req?: {
-    headers?: {
-      authorization?: string;
-    };
-  };
+  req?: Request;
+  res?: Response;
   currentUser: AuthenticatedUser | null;
+  pluginServiceAuthenticated: boolean;
 }
 
 interface TokenPayload {
@@ -36,6 +38,12 @@ interface TokenPayload {
   email: string;
   username: string;
   gitlabId?: number;
+}
+
+const AUTH_ENUMERATION_SAFE_MESSAGE = 'Invalid credentials';
+
+export function getAuthEnumerationSafeMessage(): string {
+  return AUTH_ENUMERATION_SAFE_MESSAGE;
 }
 
 function extractBearerToken(authorizationHeader?: string): string | null {
@@ -58,6 +66,59 @@ function getTokenFromConnectionParams(connectionParams?: Record<string, unknown>
   }
 
   return null;
+}
+
+function readSessionCookieFromHeader(cookieHeader?: string): string | null {
+  if (!cookieHeader) {
+    return null;
+  }
+  const cookies = parseCookie(cookieHeader);
+  const name = getSessionCookieName();
+  const value = cookies[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function pluginServiceAuthenticatedFromRequest(req?: Request): boolean {
+  const expected = environment.get().pluginGraphqlServiceToken;
+  if (!expected || !req) {
+    return false;
+  }
+  const header = req.header('x-codex-plugin-token');
+  return header === expected;
+}
+
+function getCookieMaxAgeSecondsFromJwt(token: string): number {
+  const decoded = jwt.decode(token) as { exp?: number; iat?: number } | null;
+  if (decoded?.exp != null && decoded.iat != null) {
+    return Math.max(1, decoded.exp - decoded.iat);
+  }
+  return 7 * 24 * 60 * 60;
+}
+
+/**
+ * Sets the httpOnly session cookie. Combined CSRF posture: SameSite=Lax, Path=/, Secure in production,
+ * plus Apollo csrfPrevention and Origin allowlist on /graphql — do not remove any single layer.
+ */
+export function setSessionCookie(res: Response, token: string): void {
+  const name = getSessionCookieName();
+  const maxAgeSeconds = getCookieMaxAgeSecondsFromJwt(token);
+  res.cookie(name, token, {
+    httpOnly: true,
+    maxAge: maxAgeSeconds * 1000,
+    path: '/',
+    sameSite: 'lax',
+    secure: environment.isProduction(),
+  });
+}
+
+export function clearSessionCookie(res: Response): void {
+  const name = getSessionCookieName();
+  res.clearCookie(name, {
+    httpOnly: true,
+    path: '/',
+    sameSite: 'lax',
+    secure: environment.isProduction(),
+  });
 }
 
 export async function resolveCurrentUserFromToken(token: string | null): Promise<AuthenticatedUser | null> {
@@ -104,20 +165,34 @@ export async function resolveCurrentUserFromToken(token: string | null): Promise
 }
 
 export async function buildGraphQLContext(options: {
-  req?: {
-    headers?: {
-      authorization?: string;
-    };
-  };
+  req?: Request;
+  res?: Response;
+  cookieHeader?: string;
   connectionParams?: Record<string, unknown>;
 }): Promise<GraphQLContext> {
-  const token =
-    extractBearerToken(options.req?.headers?.authorization) ||
-    getTokenFromConnectionParams(options.connectionParams);
+  const pluginOk = pluginServiceAuthenticatedFromRequest(options.req);
+  const cookieHeader =
+    options.cookieHeader ||
+    (typeof options.req?.headers.cookie === 'string' ? options.req.headers.cookie : undefined);
+  const cookieToken = readSessionCookieFromHeader(cookieHeader);
+  const bearerFromHeader = extractBearerToken(options.req?.headers.authorization);
+  const bearerFromWs = getTokenFromConnectionParams(options.connectionParams);
+  const bearerToken = bearerFromHeader || bearerFromWs;
+  const token = cookieToken || bearerToken;
+
+  const currentUser = await resolveCurrentUserFromToken(token);
+  if (currentUser && bearerToken && !cookieToken) {
+    logger.info('graphql_auth_bearer_header', {
+      userId: currentUser.userId,
+      userAgent: options.req?.headers['user-agent'],
+    });
+  }
 
   return {
     req: options.req,
-    currentUser: await resolveCurrentUserFromToken(token),
+    res: options.res,
+    currentUser,
+    pluginServiceAuthenticated: pluginOk,
   };
 }
 
@@ -127,4 +202,11 @@ export function requireCurrentUser(context: GraphQLContext): AuthenticatedUser {
   }
 
   return context.currentUser;
+}
+
+export function requireUserOrPluginService(context: GraphQLContext): void {
+  if (context.currentUser || context.pluginServiceAuthenticated) {
+    return;
+  }
+  throw new AppError('Not authenticated', 401);
 }

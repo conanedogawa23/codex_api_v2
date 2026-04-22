@@ -92,20 +92,18 @@ export const sprintRepoModule = createModule({
     }
 
     extend type Query {
-      sprintRepo(id: ID!, userId: ID, userRole: String): SprintRepo
-      sprintRepoByKey(key: String!, userId: ID, userRole: String): SprintRepo
+      sprintRepo(id: ID!): SprintRepo
+      sprintRepoByKey(key: String!): SprintRepo
       sprintRepos(
         limit: Int = 20
         offset: Int = 0
         status: SprintRepoStatus
         groupName: String
         search: String
-        userId: ID
-        userRole: String
       ): SprintReposResult!
-      sprintReposByGroup(groupId: String!, status: SprintRepoStatus, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
-      sprintReposByOwner(ownerId: String!, status: SprintRepoStatus, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
-      sprintReposByStatus(status: SprintRepoStatus!, limit: Int = 20, userId: ID, userRole: String): [SprintRepo!]!
+      sprintReposByGroup(groupId: String!, status: SprintRepoStatus, limit: Int = 20): [SprintRepo!]!
+      sprintReposByOwner(ownerId: String!, status: SprintRepoStatus, limit: Int = 20): [SprintRepo!]!
+      sprintReposByStatus(status: SprintRepoStatus!, limit: Int = 20): [SprintRepo!]!
     }
 
     extend type Mutation {
@@ -168,11 +166,7 @@ export const sprintRepoModule = createModule({
     },
 
     Query: {
-      sprintRepo: async (
-        _: any,
-        { id, userId, userRole }: { id: string; userId?: string; userRole?: string },
-        context: GraphQLContext
-      ) => {
+      sprintRepo: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
           requireCurrentUser(context);
 
@@ -183,16 +177,12 @@ export const sprintRepoModule = createModule({
           await requireSprintRepoAccess(context, sprintRepo._id?.toString() || id);
           return sprintRepo;
         } catch (error) {
-          logger.error('Error fetching sprint repository', { id, userId, error });
+          logger.error('Error fetching sprint repository', { id, error });
           throw error;
         }
       },
 
-      sprintRepoByKey: async (
-        _: any,
-        { key, userId, userRole }: { key: string; userId?: string; userRole?: string },
-        context: GraphQLContext
-      ) => {
+      sprintRepoByKey: async (_: any, { key }: { key: string }, context: GraphQLContext) => {
         try {
           requireCurrentUser(context);
           const sprintRepo = await SprintRepo.findByKey(key);
@@ -204,7 +194,7 @@ export const sprintRepoModule = createModule({
 
           return sprintRepo;
         } catch (error) {
-          logger.error('Error fetching sprint repository by key', { key, userId, error });
+          logger.error('Error fetching sprint repository by key', { key, error });
           throw error;
         }
       },
@@ -217,16 +207,12 @@ export const sprintRepoModule = createModule({
           status,
           groupName,
           search,
-          userId,
-          userRole,
         }: {
           limit: number;
           offset: number;
           status?: string;
           groupName?: string;
           search?: string;
-          userId?: string;
-          userRole?: string;
         },
         context: GraphQLContext
       ) => {
@@ -272,14 +258,14 @@ export const sprintRepoModule = createModule({
             totalCount,
           };
         } catch (error) {
-          logger.error('Error fetching sprint repositories', { limit, offset, status, groupName, search, userId, error });
+          logger.error('Error fetching sprint repositories', { limit, offset, status, groupName, search, error });
           throw new AppError('Failed to fetch sprint repositories', 500);
         }
       },
 
       sprintReposByGroup: async (
         _: any,
-        { groupId, status, limit, userId, userRole }: { groupId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        { groupId, status, limit }: { groupId: string; status?: string; limit: number },
         context: GraphQLContext
       ) => {
         try {
@@ -296,14 +282,14 @@ export const sprintRepoModule = createModule({
             .limit(limit)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprint repositories by group', { groupId, status, userId, error });
+          logger.error('Error fetching sprint repositories by group', { groupId, status, error });
           throw new AppError('Failed to fetch sprint repositories for group', 500);
         }
       },
 
       sprintReposByOwner: async (
         _: any,
-        { ownerId, status, limit, userId, userRole }: { ownerId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        { ownerId, status, limit }: { ownerId: string; status?: string; limit: number },
         context: GraphQLContext
       ) => {
         try {
@@ -320,14 +306,14 @@ export const sprintRepoModule = createModule({
             .limit(limit)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprint repositories by owner', { ownerId, status, userId, error });
+          logger.error('Error fetching sprint repositories by owner', { ownerId, status, error });
           throw new AppError('Failed to fetch sprint repositories for owner', 500);
         }
       },
 
       sprintReposByStatus: async (
         _: any,
-        { status, limit, userId, userRole }: { status: string; limit: number; userId?: string; userRole?: string },
+        { status, limit }: { status: string; limit: number },
         context: GraphQLContext
       ) => {
         try {
@@ -341,7 +327,7 @@ export const sprintRepoModule = createModule({
             .limit(limit)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprint repositories by status', { status, userId, error });
+          logger.error('Error fetching sprint repositories by status', { status, error });
           throw new AppError('Failed to fetch sprint repositories by status', 500);
         }
       }

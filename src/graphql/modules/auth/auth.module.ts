@@ -1,13 +1,31 @@
 import { createModule, gql } from 'graphql-modules';
 import * as jwt from 'jsonwebtoken';
-import { User } from '../../../models/User';
-import { AppError } from '../../../middleware';
-import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
-import { getPermissionsForAccessRole, normalizeAccessRole } from '../../../utils/accessControl';
-import { logger } from '../../../utils/logger';
+
 import { environment } from '../../../config/environment';
+import { AppError } from '../../../middleware';
+import { User } from '../../../models/User';
+import { getRequestClientIp, recordAuditLogEntry } from '../../../utils/auditLogWrite';
+import {
+  getPermissionsForAccessRole,
+  normalizeAccessRole,
+} from '../../../utils/accessControl';
+import {
+  GraphQLContext,
+  clearSessionCookie,
+  getAuthEnumerationSafeMessage,
+  requireCurrentUser,
+  setSessionCookie,
+} from '../../../utils/auth';
 import { emailService } from '../../../utils/emailService';
-import { generateOTP, getOTPExpiry, isOTPExpired, hashOTP, verifyOTP, OTP_CONFIG } from '../../../utils/otpUtils';
+import { logger } from '../../../utils/logger';
+import {
+  generateOTP,
+  getOTPExpiry,
+  hashOTP,
+  isOTPExpired,
+  OTP_CONFIG,
+  verifyOTP,
+} from '../../../utils/otpUtils';
 
 // JWT secret from environment or default for development
 const JWT_SECRET = environment.JWT_SECRET;
@@ -20,6 +38,10 @@ interface TokenPayload {
   gitlabId?: number;
 }
 
+/**
+ * AuthUser is intentionally broad: the web app reads role, permissions, and super-admin flags on verifyToken/me.
+ * Field-minimization for anonymous or narrow callers is a future hardening step (PublicUser / split queries).
+ */
 function toAuthUser(user: any) {
   return {
     userId: user._id?.toString() || user.userId,
@@ -40,7 +62,7 @@ export const authModule = createModule({
   id: 'auth',
   typeDefs: gql`
     type AuthPayload {
-      token: String!
+      token: String
       user: AuthUser!
     }
 
@@ -86,6 +108,7 @@ export const authModule = createModule({
       login(input: LoginInput!): AuthPayload!
       requestOTP(input: RequestOTPInput!): RequestOTPResponse!
       verifyOTP(input: VerifyOTPInput!): AuthPayload!
+      logout: Boolean!
     }
   `,
   resolvers: {
@@ -137,25 +160,18 @@ export const authModule = createModule({
     },
 
     Mutation: {
-      login: async (_: any, { input }: { input: { email: string } }) => {
+      login: async (_: any, { input }: { input: { email: string } }, context: GraphQLContext) => {
         const { email } = input;
 
         logger.info('Login attempt', { email });
 
-        // Find user by email
         const user = await User.findByEmail(email);
 
-        if (!user) {
-          logger.warn('Login failed: User not found', { email });
-          throw new AppError('User not found. Please contact your administrator.', 404);
+        if (!user || !user.isActive) {
+          logger.warn('Login failed', { email });
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
-        if (!user.isActive) {
-          logger.warn('Login failed: User inactive', { email });
-          throw new AppError('Your account is inactive. Please contact your administrator.', 403);
-        }
-
-        // Generate JWT token
         const tokenPayload: TokenPayload = {
           userId: user._id.toString(),
           email: user.email,
@@ -169,10 +185,22 @@ export const authModule = createModule({
           { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
         );
 
+        if (context.res) {
+          setSessionCookie(context.res, token);
+        }
+
         logger.info('Login successful', {
           userId: user._id.toString(),
           email: user.email,
           gitlabId: user.gitlabId,
+        });
+
+        recordAuditLogEntry({
+          action: 'auth_login',
+          ip: getRequestClientIp(context.req),
+          metadata: { gitlabId: user.gitlabId },
+          result: 'success',
+          userId: user._id.toString(),
         });
 
         return {
@@ -181,22 +209,16 @@ export const authModule = createModule({
         };
       },
 
-      requestOTP: async (_: any, { input }: { input: { email: string } }) => {
+      requestOTP: async (_: any, { input }: { input: { email: string } }, context: GraphQLContext) => {
         const { email } = input;
 
         logger.info('OTP request attempt', { email });
 
-        // Find user by email
         const user = await User.findOne({ email: email.toLowerCase() });
 
-        if (!user) {
-          logger.warn('OTP request failed: User not found', { email });
-          throw new AppError('User not found. Please contact your administrator.', 404);
-        }
-
-        if (!user.isActive) {
-          logger.warn('OTP request failed: User inactive', { email });
-          throw new AppError('Your account is inactive. Please contact your administrator.', 403);
+        if (!user || !user.isActive) {
+          logger.warn('OTP request failed', { email });
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
         // Check if user is locked due to too many attempts
@@ -236,6 +258,14 @@ export const authModule = createModule({
           expiresAt: otpExpiry.toISOString(),
         });
 
+        recordAuditLogEntry({
+          action: 'auth_request_otp',
+          ip: getRequestClientIp(context.req),
+          metadata: { expiresAt: otpExpiry.toISOString() },
+          result: 'success',
+          userId: user._id.toString(),
+        });
+
         return {
           success: true,
           message: 'OTP sent to your email address. Please check your inbox.',
@@ -243,47 +273,41 @@ export const authModule = createModule({
         };
       },
 
-      verifyOTP: async (_: any, { input }: { input: { email: string; otp: string } }) => {
+      verifyOTP: async (
+        _: any,
+        { input }: { input: { email: string; otp: string } },
+        context: GraphQLContext
+      ) => {
         const { email, otp } = input;
 
         logger.info('OTP verification attempt', { email });
 
-        // Find user by email
         const user = await User.findOne({ email: email.toLowerCase() });
 
-        if (!user) {
-          logger.warn('OTP verification failed: User not found', { email });
-          throw new AppError('User not found. Please contact your administrator.', 404);
+        if (!user || !user.isActive) {
+          logger.warn('OTP verification failed', { email });
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
-        if (!user.isActive) {
-          logger.warn('OTP verification failed: User inactive', { email });
-          throw new AppError('Your account is inactive. Please contact your administrator.', 403);
-        }
-
-        // Check if OTP exists
         if (!user.otp || !user.otpExpiry) {
           logger.warn('OTP verification failed: No OTP found', { email });
-          throw new AppError('No OTP found. Please request a new OTP.', 400);
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
-        // Check if OTP is expired
         if (isOTPExpired(user.otpExpiry)) {
           logger.warn('OTP verification failed: OTP expired', { email });
-          // Clear expired OTP
           user.otp = undefined;
           user.otpExpiry = undefined;
           user.otpAttempts = 0;
           await user.save();
-          throw new AppError('OTP has expired. Please request a new OTP.', 400);
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
-        // Verify OTP
         const isValid = verifyOTP(otp, user.otp);
 
         if (!isValid) {
           logger.warn('OTP verification failed: Invalid OTP', { email });
-          throw new AppError('Invalid OTP. Please check and try again.', 400);
+          throw new AppError(getAuthEnumerationSafeMessage(), 401);
         }
 
         // Clear OTP after successful verification
@@ -307,16 +331,44 @@ export const authModule = createModule({
           { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
         );
 
+        if (context.res) {
+          setSessionCookie(context.res, token);
+        }
+
         logger.info('OTP verification successful, login granted', {
           userId: user._id.toString(),
           email: user.email,
           gitlabId: user.gitlabId,
         });
 
+        recordAuditLogEntry({
+          action: 'auth_verify_otp',
+          ip: getRequestClientIp(context.req),
+          metadata: { gitlabId: user.gitlabId },
+          result: 'success',
+          userId: user._id.toString(),
+        });
+
         return {
           token,
           user: toAuthUser(user),
         };
+      },
+
+      logout: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
+        if (!context.res) {
+          throw new AppError('Not authenticated', 401);
+        }
+        clearSessionCookie(context.res);
+        logger.info('User logged out', { userId: currentUser.userId });
+        recordAuditLogEntry({
+          action: 'auth_logout',
+          ip: getRequestClientIp(context.req),
+          result: 'success',
+          userId: currentUser.userId,
+        });
+        return true;
       },
     },
   },

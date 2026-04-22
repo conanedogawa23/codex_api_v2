@@ -14,6 +14,9 @@ export interface EnvironmentConfig {
   logLevel: string;
   jwtSecret: string;
   jwtExpiresIn: string;
+  allowedOrigins: string[];
+  jobServiceToken?: string;
+  pluginGraphqlServiceToken?: string;
   redis: {
     host: string;
     port: number;
@@ -46,6 +49,19 @@ class Environment {
   }
 
   private loadConfig(): EnvironmentConfig {
+    const defaultOrigins = [
+      'https://platform.prompttime.ai',
+      'http://localhost:3001',
+      'http://localhost:5001',
+      'http://127.0.0.1:3001',
+      'http://127.0.0.1:5001',
+    ];
+    const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins;
+
     return {
       port: parseInt(process.env.PORT || '5001', 10),
       nodeEnv: process.env.NODE_ENV || 'development',
@@ -56,6 +72,9 @@ class Environment {
       logLevel: process.env.LOG_LEVEL || 'info',
       jwtSecret: process.env.JWT_SECRET || 'default-secret-change-in-production',
       jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      allowedOrigins,
+      jobServiceToken: process.env.JOB_SERVICE_TOKEN,
+      pluginGraphqlServiceToken: process.env.PLUGIN_GRAPHQL_SERVICE_TOKEN,
       redis: {
         host: process.env.REDIS_HOST || '127.0.0.1',
         port: parseInt(process.env.REDIS_PORT || '6379', 10),

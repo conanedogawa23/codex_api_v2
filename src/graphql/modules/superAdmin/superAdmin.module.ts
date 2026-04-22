@@ -22,6 +22,7 @@ import { MergeRequest } from '../../../models/MergeRequest';
 import { Pipeline } from '../../../models/Pipeline';
 import { Project } from '../../../models/Project';
 import { User } from '../../../models/User';
+import { getRequestClientIp, recordAuditLogEntry } from '../../../utils/auditLogWrite';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import {
   canManageAccessRoles,
@@ -66,6 +67,25 @@ function requireSuperAdmin(context: GraphQLContext) {
   }
 
   return currentUser;
+}
+
+function auditSuperAdminMutation(
+  context: GraphQLContext,
+  action: string,
+  metadata?: Record<string, unknown>
+): void {
+  const userId = context.currentUser?.userId;
+  if (!userId) {
+    return;
+  }
+
+  recordAuditLogEntry({
+    action,
+    ip: getRequestClientIp(context.req),
+    metadata,
+    result: 'success',
+    userId,
+  });
 }
 
 function escapeRegex(value: string): string {
@@ -560,6 +580,11 @@ export const superAdminModule = createModule({
           throw new AppError('User not found after assignment', 404);
         }
 
+        auditSuperAdminMutation(context, 'superadmin_assign_user_projects', {
+          projectCount: projects.length,
+          targetUserId: userId,
+        });
+
         return toUserAccessRecord(updatedUser);
       },
       removeUserFromProjects: async (
@@ -608,6 +633,11 @@ export const superAdminModule = createModule({
           throw new AppError('User not found after project removal', 404);
         }
 
+        auditSuperAdminMutation(context, 'superadmin_remove_user_projects', {
+          projectCount: projectIds.length,
+          targetUserId: userId,
+        });
+
         return toUserAccessRecord(updatedUser);
       },
       setUserAccessRole: async (
@@ -634,6 +664,11 @@ export const superAdminModule = createModule({
           accessRole: user.accessRole,
         });
 
+        auditSuperAdminMutation(context, 'superadmin_set_user_access_role', {
+          accessRole: user.accessRole,
+          targetUserId: userId,
+        });
+
         return toUserAccessRecord(user.toObject());
       },
       setSuperAdmin: async (
@@ -657,6 +692,11 @@ export const superAdminModule = createModule({
           isSuperAdmin,
         });
 
+        auditSuperAdminMutation(context, 'superadmin_set_super_admin', {
+          isSuperAdmin,
+          targetUserId: userId,
+        });
+
         return toUserAccessRecord(user.toObject());
       },
       triggerSync: async (
@@ -667,6 +707,8 @@ export const superAdminModule = createModule({
         requireSuperAdmin(context);
 
         await triggerSyncByType(syncType);
+
+        auditSuperAdminMutation(context, 'superadmin_trigger_sync', { syncType });
 
         return {
           success: true,
@@ -682,6 +724,8 @@ export const superAdminModule = createModule({
 
         await pauseSyncByType(syncType);
 
+        auditSuperAdminMutation(context, 'superadmin_pause_sync', { syncType });
+
         return {
           success: true,
           message: `${getSyncTypeLabel(syncType)} sync paused successfully`,
@@ -696,6 +740,8 @@ export const superAdminModule = createModule({
 
         await resumeSyncByType(syncType);
 
+        auditSuperAdminMutation(context, 'superadmin_resume_sync', { syncType });
+
         return {
           success: true,
           message: `${getSyncTypeLabel(syncType)} sync resumed successfully`,
@@ -707,6 +753,8 @@ export const superAdminModule = createModule({
         for (const syncType of Object.keys(syncQueueMap) as SyncTypeValue[]) {
           await triggerSyncByType(syncType);
         }
+
+        auditSuperAdminMutation(context, 'superadmin_trigger_all_syncs', {});
 
         return {
           success: true,

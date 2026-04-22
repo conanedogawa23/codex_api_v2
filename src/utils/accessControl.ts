@@ -20,6 +20,7 @@ export const PERMISSION = {
   VIEW_DEPARTMENT_RESOURCE_UTILIZATION: 'VIEW_DEPARTMENT_RESOURCE_UTILIZATION',
   VIEW_PLATFORM_COST_REPORTS: 'VIEW_PLATFORM_COST_REPORTS',
   DOWNLOAD_PLATFORM_COST_REPORTS: 'DOWNLOAD_PLATFORM_COST_REPORTS',
+  MANAGE_PLATFORM_FINANCE_RATES: 'MANAGE_PLATFORM_FINANCE_RATES',
 } as const;
 
 export type Permission = (typeof PERMISSION)[keyof typeof PERMISSION];
@@ -44,11 +45,13 @@ const ROLE_PERMISSION_MAP: Record<AccessRole, Permission[]> = {
     PERMISSION.MANAGE_DEPARTMENT_PROJECTS,
     PERMISSION.MANAGE_DEPARTMENT_SPRINTS,
     PERMISSION.MANAGE_DEPARTMENT_TASKS,
+    PERMISSION.MANAGE_PLATFORM_FINANCE_RATES,
   ],
   [ACCESS_ROLE.FINANCE]: [
     PERMISSION.VIEW_DEPARTMENT_MEMBERS,
     PERMISSION.VIEW_PLATFORM_COST_REPORTS,
     PERMISSION.DOWNLOAD_PLATFORM_COST_REPORTS,
+    PERMISSION.MANAGE_PLATFORM_FINANCE_RATES,
   ],
 };
 
@@ -187,6 +190,13 @@ export function canDownloadPlatformCostReports(
   isSuperAdmin: boolean = false
 ): boolean {
   return isSuperAdmin || normalizeAccessRole(accessRole) === ACCESS_ROLE.FINANCE;
+}
+
+export function canManagePlatformFinanceRates(
+  accessRole?: string | null,
+  isSuperAdmin: boolean = false
+): boolean {
+  return isSuperAdmin || hasPermission(getPermissionsForAccessRole(accessRole, isSuperAdmin), PERMISSION.MANAGE_PLATFORM_FINANCE_RATES);
 }
 
 export function canManageAccessRoles(

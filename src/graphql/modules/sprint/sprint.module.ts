@@ -160,12 +160,10 @@ export const sprintModule = createModule({
         status: SprintStatus
         sprintRepoId: ID
         search: String
-        userId: ID
-        userRole: String
       ): SprintsResult!
-      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20, userId: ID, userRole: String): [Sprint!]!
-      sprintsByAssignee(userId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
-      activeSprints(sprintRepoId: ID, userId: ID, userRole: String): [Sprint!]!
+      sprintsBySprintRepo(sprintRepoId: ID!, status: SprintStatus, limit: Int = 20): [Sprint!]!
+      sprintsByAssignee(status: SprintStatus, limit: Int = 20): [Sprint!]!
+      activeSprints(sprintRepoId: ID): [Sprint!]!
     }
 
     extend type Mutation {
@@ -296,16 +294,12 @@ export const sprintModule = createModule({
           status,
           sprintRepoId,
           search,
-          userId,
-          userRole,
         }: {
           limit: number;
           offset: number;
           status?: string;
           sprintRepoId?: string;
           search?: string;
-          userId?: string;
-          userRole?: string;
         },
         context: GraphQLContext
       ) => {
@@ -364,7 +358,7 @@ export const sprintModule = createModule({
             totalCount,
           };
         } catch (error) {
-          logger.error('Error fetching sprints', { limit, offset, status, sprintRepoId, search, userId, error });
+          logger.error('Error fetching sprints', { limit, offset, status, sprintRepoId, search, error });
           if (error instanceof AppError) {
             throw error;
           }
@@ -374,7 +368,7 @@ export const sprintModule = createModule({
 
       sprintsBySprintRepo: async (
         _: any,
-        { sprintRepoId, status, limit, userId, userRole }: { sprintRepoId: string; status?: string; limit: number; userId?: string; userRole?: string },
+        { sprintRepoId, status, limit }: { sprintRepoId: string; status?: string; limit: number },
         context: GraphQLContext
       ) => {
         try {
@@ -408,19 +402,19 @@ export const sprintModule = createModule({
           
           return results;
         } catch (error) {
-          logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, userId, error });
+          logger.error('Error fetching sprints by sprint repo', { sprintRepoId, status, error });
           throw new AppError('Failed to fetch sprints for sprint repo', 500);
         }
       },
 
       sprintsByAssignee: async (
         _: any,
-        { userId, status, limit }: { userId: string; status?: string; limit: number },
+        { status, limit }: { status?: string; limit: number },
         context: GraphQLContext
       ) => {
         try {
           requireCurrentUser(context);
-          // Note: assignees.id is stored as string in the database, no ObjectId conversion needed
+          const userId = context.currentUser!.userId;
           const filter: any = { 'assignees.id': userId, isActive: true };
           if (status) {
             // Convert GraphQL enum (PLANNED, ACTIVE, etc.) to lowercase for database query
@@ -434,14 +428,18 @@ export const sprintModule = createModule({
             .limit(limit)
             .lean();
         } catch (error) {
-          logger.error('Error fetching sprints by assignee', { userId, status, error });
+          logger.error('Error fetching sprints by assignee', {
+            userId: context.currentUser?.userId,
+            status,
+            error,
+          });
           throw new AppError('Failed to fetch sprints for assignee', 500);
         }
       },
 
       activeSprints: async (
         _: any,
-        { sprintRepoId, userId, userRole }: { sprintRepoId?: string; userId?: string; userRole?: string },
+        { sprintRepoId }: { sprintRepoId?: string },
         context: GraphQLContext
       ) => {
         try {
@@ -458,7 +456,7 @@ export const sprintModule = createModule({
             .sort({ startDate: -1 })
             .lean();
         } catch (error) {
-          logger.error('Error fetching active sprints', { sprintRepoId, userId, error });
+          logger.error('Error fetching active sprints', { sprintRepoId, error });
           throw new AppError('Failed to fetch active sprints', 500);
         }
       }

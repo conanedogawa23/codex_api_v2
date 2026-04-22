@@ -1,6 +1,7 @@
 import { createModule, gql } from 'graphql-modules';
 import { Iteration } from '../../../models/Iteration';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 
 export const iterationModule = createModule({
@@ -45,7 +46,8 @@ export const iterationModule = createModule({
     },
     
     Query: {
-      iteration: async (_: any, { id }: { id: string }) => {
+      iteration: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching iteration by ID', { id });
         
         const iteration = await Iteration.findById(id).lean();
@@ -57,7 +59,8 @@ export const iterationModule = createModule({
         return iteration;
       },
 
-      iterationByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      iterationByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching iteration by GitLab ID', { gitlabId });
         
         const iteration = await Iteration.findOne({ gitlabId, isDeleted: false }).lean();
@@ -72,7 +75,12 @@ export const iterationModule = createModule({
         return iteration;
       },
 
-      iterations: async (_: any, { groupId, state, limit, offset }: { groupId: number; state?: string; limit: number; offset: number }) => {
+      iterations: async (
+        _: any,
+        { groupId, state, limit, offset }: { groupId: number; state?: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching iterations', { groupId, state, limit, offset });
         
         const filter: any = { groupId, isDeleted: false };
@@ -85,7 +93,8 @@ export const iterationModule = createModule({
           .lean();
       },
 
-      activeIterations: async (_: any, { groupId }: { groupId: number }) => {
+      activeIterations: async (_: any, { groupId }: { groupId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching active iterations', { groupId });
         
         const now = new Date();
@@ -101,7 +110,8 @@ export const iterationModule = createModule({
           .lean();
       },
 
-      currentIteration: async (_: any, { groupId }: { groupId: number }) => {
+      currentIteration: async (_: any, { groupId }: { groupId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching current iteration', { groupId });
         
         const iteration = await Iteration.findOne({

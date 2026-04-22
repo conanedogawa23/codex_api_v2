@@ -1,6 +1,7 @@
 import { createModule, gql } from 'graphql-modules';
 import { database } from '../../../config/database';
 import pkg from '../../../../package.json';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 
 export const healthModule = createModule({
   id: 'health',
@@ -23,7 +24,8 @@ export const healthModule = createModule({
   `,
   resolvers: {
     Query: {
-      health: async () => {
+      health: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        requireCurrentUser(context);
         const dbHealth = await database.healthCheck();
         
         return {

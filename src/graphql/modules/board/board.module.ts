@@ -2,6 +2,7 @@ import { createModule, gql } from 'graphql-modules';
 import mongoose from 'mongoose';
 import { Task } from '../../../models/Task';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 
 export const boardModule = createModule({
@@ -26,9 +27,11 @@ export const boardModule = createModule({
     Query: {
       boardData: async (
         _: any,
-        { projectId, sprintId }: { projectId?: string; sprintId?: string }
+        { projectId, sprintId }: { projectId?: string; sprintId?: string },
+        context: GraphQLContext
       ) => {
         try {
+          requireCurrentUser(context);
           // Build filter based on provided parameters
           const filter: any = { isActive: true };
 

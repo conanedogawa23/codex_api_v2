@@ -1,6 +1,7 @@
 import { createModule, gql } from 'graphql-modules';
 import { Namespace } from '../../../models/Namespace';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
 import { logger } from '../../../utils/logger';
 
 export const namespaceModule = createModule({
@@ -49,7 +50,8 @@ export const namespaceModule = createModule({
     },
     
     Query: {
-      namespace: async (_: any, { id }: { id: string }) => {
+      namespace: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching namespace by ID', { id });
         
         const namespace = await Namespace.findById(id).lean();
@@ -61,7 +63,8 @@ export const namespaceModule = createModule({
         return namespace;
       },
 
-      namespaceByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }) => {
+      namespaceByGitlabId: async (_: any, { gitlabId }: { gitlabId: number }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching namespace by GitLab ID', { gitlabId });
         
         const namespace = await Namespace.findOne({ gitlabId, isDeleted: false }).lean();
@@ -76,7 +79,8 @@ export const namespaceModule = createModule({
         return namespace;
       },
 
-      namespaceByPath: async (_: any, { path }: { path: string }) => {
+      namespaceByPath: async (_: any, { path }: { path: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Fetching namespace by path', { path });
         
         const namespace = await Namespace.findOne({ 
@@ -91,7 +95,12 @@ export const namespaceModule = createModule({
         return namespace;
       },
 
-      namespaces: async (_: any, { kind, limit, offset }: { kind?: string; limit: number; offset: number }) => {
+      namespaces: async (
+        _: any,
+        { kind, limit, offset }: { kind?: string; limit: number; offset: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching namespaces', { kind, limit, offset });
         
         const filter: any = { isDeleted: false };
@@ -104,7 +113,12 @@ export const namespaceModule = createModule({
           .lean();
       },
 
-      namespacesByParent: async (_: any, { parentId, limit }: { parentId: number; limit: number }) => {
+      namespacesByParent: async (
+        _: any,
+        { parentId, limit }: { parentId: number; limit: number },
+        context: GraphQLContext
+      ) => {
+        requireCurrentUser(context);
         logger.info('Fetching namespaces by parent', { parentId, limit });
         
         return await Namespace.find({ parentId, isDeleted: false })

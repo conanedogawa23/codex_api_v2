@@ -116,7 +116,10 @@ export const eventModule = createModule({
         { userId, limit, offset }: { userId: string; limit: number; offset: number },
         context: GraphQLContext
       ) => {
-        requireCurrentUser(context);
+        const currentUser = requireCurrentUser(context);
+        if (userId !== currentUser.userId && !currentUser.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
+        }
         logger.info('Fetching events by user', { userId, limit, offset });
 
         const filter = await withProjectFilter(

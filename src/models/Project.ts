@@ -42,6 +42,8 @@ export interface IProject extends Document {
     allocated: number;
     spent: number;
     currency: string;
+    /** When `budget.spent` was last written from the finance cost calculator */
+    spentRecalculatedAt?: Date;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -197,7 +199,11 @@ const ProjectSchema: Schema = new Schema({
     currency: {
       type: String,
       default: 'USD'
-    }
+    },
+    spentRecalculatedAt: {
+      type: Date,
+      index: true,
+    },
   },
   createdAt: {
     type: Date,

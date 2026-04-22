@@ -97,7 +97,10 @@ export const draftNoteModule = createModule({
         { authorId, limit, offset }: { authorId: string; limit: number; offset: number },
         context: GraphQLContext
       ) => {
-        requireCurrentUser(context);
+        const currentUser = requireCurrentUser(context);
+        if (authorId !== currentUser.userId && !currentUser.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
+        }
         logger.info('Fetching draft notes by author', { authorId, limit, offset });
 
         const filter = await withProjectFilter(

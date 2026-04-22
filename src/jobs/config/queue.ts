@@ -62,6 +62,7 @@ export const labelSyncQueue = new Queue('label-sync', queueOptions);
 export const milestoneSyncQueue = new Queue('milestone-sync', queueOptions);
 export const iterationSyncQueue = new Queue('iteration-sync', queueOptions);
 export const eventSyncQueue = new Queue('event-sync', queueOptions);
+export const budgetSpentQueue = new Queue('budget-spent', queueOptions);
 
 function registerQueueListeners(queue: any, label: string): void {
   queue.on('error', (error: Error) => {
@@ -112,6 +113,7 @@ for (const [queue, label] of [
   [milestoneSyncQueue, 'Milestone'],
   [iterationSyncQueue, 'Iteration'],
   [eventSyncQueue, 'Event'],
+  [budgetSpentQueue, 'Budget spent'],
 ] as Array<[any, string]>) {
   registerQueueListeners(queue, label);
 }
@@ -130,6 +132,7 @@ export const closeQueues = async (): Promise<void> => {
   await milestoneSyncQueue.close();
   await iterationSyncQueue.close();
   await eventSyncQueue.close();
+  await budgetSpentQueue.close();
   await redisClient.quit();
   await subscriber.quit();
   logger.info('Job queues closed successfully');

@@ -56,6 +56,12 @@ export async function handleGitLabWebhook(req: Request, res: Response): Promise<
     const configuredSecret = environment.get().gitlab.webhookSecret;
     const receivedSecret = req.header('x-gitlab-token');
 
+    if (environment.isProduction() && !configuredSecret?.trim()) {
+      logger.error('GitLab webhook rejected: GITLAB_WEBHOOK_SECRET is not set in production');
+      res.status(503).json({ success: false, error: 'Webhook is not configured' });
+      return;
+    }
+
     if (configuredSecret && receivedSecret !== configuredSecret) {
       logger.warn('Rejected GitLab webhook with invalid token', {
         event: req.header('x-gitlab-event'),

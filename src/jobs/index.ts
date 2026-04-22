@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger';
 import {
+  budgetSpentQueue,
   closeQueues,
   commitSyncQueue,
   eventSyncQueue,
@@ -42,6 +43,7 @@ import { processMilestoneSync, type MilestoneSyncJobData } from './processors/mi
 import { processMergeRequestSync } from './processors/mergeRequests/mergeRequestSync.processor';
 import { processNamespaceSync } from './processors/namespaces/namespaceSync.processor';
 import { processPipelineSync } from './processors/pipelines/pipelineSync.processor';
+import { processBudgetSpent } from './processors/budgetSpent/budgetSpent.processor';
 
 type NamedSyncJobConfig = {
   queue: any;
@@ -311,6 +313,15 @@ export class JobManager {
         intervalMs: 15 * 60 * 1000,
         defaultData: { batchSize: 100 },
         processor: processEventSync,
+      }, options);
+
+      await this.initializeNamedRecurringSync({
+        queue: budgetSpentQueue,
+        jobName: 'budget-spent-recalc',
+        label: 'Budget spent',
+        intervalMs: 20 * 60 * 1000,
+        defaultData: { projectIds: [] },
+        processor: processBudgetSpent,
       }, options);
 
       this.isInitialized = true;

@@ -179,6 +179,7 @@ export const projectModule = createModule({
       allocated: Float
       spent: Float
       currency: String
+      spentRecalculatedAt: DateTime
     }
 
     """

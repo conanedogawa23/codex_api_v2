@@ -1,248 +1,337 @@
+import { randomUUID } from 'crypto';
+import { isIPv4, isIPv6 } from 'net';
+
+import FileType from 'file-type';
+import sanitizeFilename from 'sanitize-filename';
+
 import { AppError } from '../middleware';
+import { AuditLog } from '../models/AuditLog';
 import { logger } from './logger';
 
-export interface FileValidationResult {
-  isValid: boolean;
-  error?: string;
-  mimeType?: string;
-  size?: number;
-}
+/**
+ * Attachments are stored inline (base64) or by URL; there is no HTTP download route today.
+ * If a future `/uploads/*` or similar route is added, responses must set
+ * `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment` for types that can execute inline (e.g. PDF).
+ */
 
-// Allowed MIME types for file uploads
-const ALLOWED_MIME_TYPES = [
-  // Images
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
-  'image/jpg',
   'image/png',
   'image/gif',
   'image/webp',
-  'image/svg+xml',
-  // Documents
   'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'text/plain',
   'text/csv',
-  // Archives
-  'application/zip',
-  'application/x-zip-compressed',
-  'application/x-rar-compressed',
-];
+  'application/json',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
 
-// Maximum file size: 5MB
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+const TEXTLIKE_MIME = new Set(['text/plain', 'text/csv', 'application/json']);
 
-/**
- * Validates base64 encoded file data
- * @param base64Data - The base64 encoded file data (with or without data URI prefix)
- * @returns Validation result with error message if invalid
- */
-export function validateBase64File(base64Data: string): FileValidationResult {
+const OOXML_MIME = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+  'application/json': 'json',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+};
+
+export interface RawAttachmentInput {
+  name: string;
+  type: string;
+  size?: number;
+  data?: string;
+  url?: string;
+}
+
+export interface ProcessedAttachment {
+  name: string;
+  type: string;
+  size: number;
+  data?: string;
+  url?: string;
+}
+
+export interface AttachmentAuditContext {
+  userId: string;
+  taskId?: string;
+  commentId?: string;
+  ip?: string;
+}
+
+function throwInvalid(): never {
+  throw new AppError('Invalid attachment', 400);
+}
+
+function extractBase64Payload(raw: string): { declaredMime?: string; base64: string } {
+  if (!raw || !raw.trim()) {
+    throwInvalid();
+  }
+  if (raw.startsWith('data:')) {
+    const matches = raw.match(/^data:([^;]+);base64,(.+)$/);
+    if (!matches) {
+      throwInvalid();
+    }
+    return { declaredMime: matches[1], base64: matches[2] };
+  }
+  return { base64: raw.replace(/\s/g, '') };
+}
+
+function decodeBase64ToBuffer(base64: string): Buffer {
   try {
-    // Check if data is empty
-    if (!base64Data || base64Data.trim().length === 0) {
-      return {
-        isValid: false,
-        error: 'File data is empty'
-      };
+    return Buffer.from(base64, 'base64');
+  } catch {
+    throwInvalid();
+  }
+}
+
+function isBlockedUrlHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost')) {
+    return true;
+  }
+  if (h === 'metadata.google.internal' || h.endsWith('.internal')) {
+    return true;
+  }
+  if (h === '169.254.169.254') {
+    return true;
+  }
+
+  if (isIPv4(h)) {
+    const parts = h.split('.').map((x) => Number(x));
+    const [a, b] = parts;
+    if (a === 10) {
+      return true;
     }
+    if (a === 127) {
+      return true;
+    }
+    if (a === 169 && b === 254) {
+      return true;
+    }
+    if (a === 172 && b >= 16 && b <= 31) {
+      return true;
+    }
+    if (a === 192 && b === 168) {
+      return true;
+    }
+    if (a === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0) {
+      return true;
+    }
+    return false;
+  }
 
-    // Extract MIME type and base64 data from data URI
-    let mimeType: string | undefined;
-    let pureBase64: string;
-
-    if (base64Data.startsWith('data:')) {
-      // Extract MIME type from data URI (e.g., "data:image/png;base64,...")
-      const matches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) {
-        return {
-          isValid: false,
-          error: 'Invalid data URI format'
-        };
+  if (isIPv6(h)) {
+    const lower = h.toLowerCase();
+    if (lower === '::1') {
+      return true;
+    }
+    if (lower.startsWith('fc') || lower.startsWith('fd')) {
+      return true;
+    }
+    if (lower.startsWith('fe80:')) {
+      return true;
+    }
+    if (lower.startsWith('::ffff:')) {
+      const v4 = lower.replace('::ffff:', '');
+      if (isIPv4(v4)) {
+        return isBlockedUrlHost(v4);
       }
-      mimeType = matches[1];
-      pureBase64 = matches[2];
-    } else {
-      // Assume it's pure base64 without data URI prefix
-      pureBase64 = base64Data;
     }
+    return false;
+  }
 
-    // Validate base64 format
-    const base64Regex = /^[A-Za-z0-9+/]+={0,2}$/;
-    if (!base64Regex.test(pureBase64)) {
-      return {
-        isValid: false,
-        error: 'Invalid base64 encoding'
-      };
-    }
+  return false;
+}
 
-    // Calculate file size from base64 string
-    // Base64 encoding increases size by ~33%, so we need to calculate original size
-    const padding = (pureBase64.match(/=/g) || []).length;
-    const size = Math.floor((pureBase64.length * 3) / 4) - padding;
+function validateAttachmentUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throwInvalid();
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throwInvalid();
+  }
+  if (isBlockedUrlHost(parsed.hostname)) {
+    throwInvalid();
+  }
+  return parsed.toString();
+}
 
-    // Validate file size
-    if (size > MAX_FILE_SIZE) {
-      return {
-        isValid: false,
-        error: `File size (${formatFileSize(size)}) exceeds maximum allowed size (${formatFileSize(MAX_FILE_SIZE)})`
-      };
-    }
+function assertMimeAllowed(mime: string): void {
+  if (!ALLOWED_MIME_TYPES.has(mime)) {
+    throwInvalid();
+  }
+}
 
-    // Validate MIME type if present
-    if (mimeType && !ALLOWED_MIME_TYPES.includes(mimeType)) {
-      return {
-        isValid: false,
-        error: `File type ${mimeType} is not allowed`
-      };
-    }
+function extensionForMime(mime: string): string {
+  return MIME_TO_EXT[mime] || 'bin';
+}
 
-    logger.info('File validation successful', { mimeType, size });
-
-    return {
-      isValid: true,
-      mimeType,
-      size
-    };
+async function recordUploadAudit(
+  ctx: AttachmentAuditContext,
+  meta: Record<string, unknown>,
+  result: string
+): Promise<void> {
+  try {
+    await AuditLog.create({
+      action: 'attachment_upload',
+      userId: ctx.userId,
+      ip: ctx.ip,
+      result,
+      metadata: {
+        ...meta,
+        taskId: ctx.taskId,
+        commentId: ctx.commentId,
+      },
+    });
   } catch (error) {
-    logger.error('Error validating base64 file', { error });
-    return {
-      isValid: false,
-      error: 'Failed to validate file data'
-    };
+    logger.error('Failed to write attachment audit log', { error });
   }
 }
 
-/**
- * Extracts MIME type from base64 data URI
- * @param base64Data - The base64 encoded file data
- * @returns MIME type or null if not found
- */
-export function extractMimeType(base64Data: string): string | null {
-  if (base64Data.startsWith('data:')) {
-    const matches = base64Data.match(/^data:([^;]+);base64,/);
-    return matches ? matches[1] : null;
-  }
-  return null;
-}
-
-/**
- * Extracts pure base64 data from data URI
- * @param base64Data - The base64 encoded file data (with or without data URI prefix)
- * @returns Pure base64 string
- */
-export function extractBase64Data(base64Data: string): string {
-  if (base64Data.startsWith('data:')) {
-    const matches = base64Data.match(/^data:[^;]+;base64,(.+)$/);
-    return matches ? matches[1] : base64Data;
-  }
-  return base64Data;
-}
-
-/**
- * Calculates file size from base64 string
- * @param base64Data - The base64 encoded file data (with or without data URI prefix)
- * @returns File size in bytes
- */
-export function calculateBase64FileSize(base64Data: string): number {
-  const pureBase64 = extractBase64Data(base64Data);
-  const padding = (pureBase64.match(/=/g) || []).length;
-  return Math.floor((pureBase64.length * 3) / 4) - padding;
-}
-
-/**
- * Formats file size to human-readable string
- * @param bytes - File size in bytes
- * @returns Formatted size string (e.g., "1.5 MB")
- */
-export function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 Bytes';
-
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
-
-/**
- * Gets file extension from MIME type
- * @param mimeType - MIME type
- * @returns File extension (e.g., "jpg", "pdf")
- */
-export function getFileExtensionFromMimeType(mimeType: string): string {
-  const mimeToExt: { [key: string]: string } = {
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-    'image/svg+xml': 'svg',
-    'application/pdf': 'pdf',
-    'application/msword': 'doc',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-    'application/vnd.ms-excel': 'xls',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-    'application/vnd.ms-powerpoint': 'ppt',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-    'text/plain': 'txt',
-    'text/csv': 'csv',
-    'application/zip': 'zip',
-    'application/x-zip-compressed': 'zip',
-    'application/x-rar-compressed': 'rar',
+export async function processAttachmentForUpload(
+  attachment: RawAttachmentInput,
+  audit: AttachmentAuditContext
+): Promise<ProcessedAttachment> {
+  const baseMeta = {
+    declaredMime: attachment.type,
+    declaredName: attachment.name,
+    sanitizedFilename: sanitizeFilename(attachment.name || '') || 'file',
   };
 
-  return mimeToExt[mimeType] || 'bin';
-}
-
-/**
- * Validates and processes file attachment input
- * @param attachment - Attachment object with name, data, type, size
- * @returns Processed attachment or throws error
- */
-export function processAttachment(attachment: any): any {
-  // Validate required fields
-  if (!attachment.name || !attachment.type) {
-    throw new AppError('Attachment must have name and type', 400);
+  if (!attachment.name?.trim() || !attachment.type?.trim()) {
+    await recordUploadAudit(audit, { ...baseMeta, reason: 'missing_fields' }, 'reject');
+    throwInvalid();
   }
 
-  // Validate base64 data if provided
-  if (attachment.data) {
-    const validation = validateBase64File(attachment.data);
-    if (!validation.isValid) {
-      throw new AppError(validation.error || 'Invalid file data', 400);
-    }
-
-    // Auto-populate size and type from validation if not provided
-    if (!attachment.size && validation.size) {
-      attachment.size = validation.size;
-    }
-
-    if (validation.mimeType && validation.mimeType !== attachment.type) {
-      logger.warn('MIME type mismatch', {
-        provided: attachment.type,
-        detected: validation.mimeType
-      });
-    }
+  if (attachment.url && attachment.data) {
+    await recordUploadAudit(audit, { ...baseMeta, reason: 'url_and_data' }, 'reject');
+    throwInvalid();
   }
 
-  // Validate file size if provided
-  if (attachment.size && attachment.size > MAX_FILE_SIZE) {
-    throw new AppError(
-      `File size (${formatFileSize(attachment.size)}) exceeds maximum allowed size (${formatFileSize(MAX_FILE_SIZE)})`,
-      400
+  if (attachment.url) {
+    const safeUrl = validateAttachmentUrl(attachment.url);
+    const safeBaseName = sanitizeFilename(attachment.name) || 'attachment';
+    const storedName = `${randomUUID()}-${safeBaseName}`.slice(0, 200);
+    const processed: ProcessedAttachment = {
+      name: storedName,
+      type: attachment.type.trim(),
+      size: 0,
+      url: safeUrl,
+    };
+    assertMimeAllowed(processed.type);
+    await recordUploadAudit(
+      audit,
+      {
+        ...baseMeta,
+        detectedMime: null,
+        size: 0,
+        urlHost: new URL(safeUrl).hostname,
+      },
+      'accept_url'
     );
+    return processed;
   }
 
-  // Validate MIME type
-  if (!ALLOWED_MIME_TYPES.includes(attachment.type)) {
-    throw new AppError(`File type ${attachment.type} is not allowed`, 400);
+  if (!attachment.data) {
+    await recordUploadAudit(audit, { ...baseMeta, reason: 'no_payload' }, 'reject');
+    throwInvalid();
   }
 
-  return attachment;
+  try {
+    const { declaredMime, base64 } = extractBase64Payload(attachment.data);
+    const buffer = decodeBase64ToBuffer(base64);
+    if (buffer.length === 0 || buffer.length > MAX_FILE_SIZE) {
+      await recordUploadAudit(
+        audit,
+        { ...baseMeta, size: buffer.length, reason: 'size' },
+        'reject'
+      );
+      throwInvalid();
+    }
+
+    const detected = await FileType.fromBuffer(buffer);
+    const declared = attachment.type.trim().toLowerCase();
+
+    let resolvedMime: string;
+    if (detected) {
+      resolvedMime = detected.mime;
+    } else if (TEXTLIKE_MIME.has(declared) && !buffer.includes(0)) {
+      resolvedMime = declared;
+    } else if (
+      buffer.length >= 4 &&
+      buffer[0] === 0x50 &&
+      buffer[1] === 0x4b &&
+      OOXML_MIME.has(declared)
+    ) {
+      resolvedMime = declared;
+    } else {
+      await recordUploadAudit(audit, { ...baseMeta, reason: 'unknown_magic' }, 'reject');
+      throwInvalid();
+    }
+
+    if (resolvedMime !== declared) {
+      await recordUploadAudit(
+        audit,
+        {
+          ...baseMeta,
+          detectedMime: resolvedMime,
+          reason: 'mime_mismatch',
+        },
+        'reject'
+      );
+      throwInvalid();
+    }
+
+    assertMimeAllowed(resolvedMime);
+
+    const ext = extensionForMime(resolvedMime);
+    const storedName = `${randomUUID()}.${ext}`;
+
+    const processed: ProcessedAttachment = {
+      name: storedName,
+      type: resolvedMime,
+      size: buffer.length,
+      data: buffer.toString('base64'),
+    };
+
+    await recordUploadAudit(
+      audit,
+      {
+        ...baseMeta,
+        detectedMime: resolvedMime,
+        size: buffer.length,
+        sanitizedFilename: storedName,
+      },
+      'accept_data'
+    );
+
+    return processed;
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    logger.warn('Attachment processing error', { error });
+    await recordUploadAudit(audit, { ...baseMeta, reason: 'exception' }, 'reject');
+    throwInvalid();
+  }
 }
-

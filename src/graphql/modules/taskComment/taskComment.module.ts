@@ -3,6 +3,8 @@ import { TaskComment } from '../../../models/TaskComment';
 import { User } from '../../../models/User';
 import { Task } from '../../../models/Task';
 import { AppError } from '../../../middleware';
+import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { processAttachmentForUpload } from '../../../utils/fileProcessor';
 import { logger } from '../../../utils/logger';
 
 export const taskCommentModule = createModule({
@@ -40,7 +42,6 @@ export const taskCommentModule = createModule({
     input CreateCommentInput {
       taskId: String!
       body: String!
-      authorId: String!
       parentCommentId: String
       attachments: [CommentAttachmentInput!]
     }
@@ -66,8 +67,8 @@ export const taskCommentModule = createModule({
       addTaskComment(input: CreateCommentInput!): TaskComment!
       updateTaskComment(id: ID!, input: UpdateCommentInput!): TaskComment!
       deleteTaskComment(id: ID!): Boolean!
-      addReaction(commentId: ID!, emoji: String!, userId: String!): TaskComment!
-      removeReaction(commentId: ID!, emoji: String!, userId: String!): TaskComment!
+      addReaction(commentId: ID!, emoji: String!): TaskComment!
+      removeReaction(commentId: ID!, emoji: String!): TaskComment!
       addCommentAttachment(commentId: ID!, attachment: CommentAttachmentInput!): TaskComment!
       removeCommentAttachment(commentId: ID!, attachmentName: String!): TaskComment!
     }
@@ -102,8 +103,9 @@ export const taskCommentModule = createModule({
     },
 
     Query: {
-      taskComments: async (_: any, { taskId }: { taskId: string }) => {
+      taskComments: async (_: any, { taskId }: { taskId: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           // Fetch all comments (both root and replies) for the task
           const comments = await TaskComment.find({
             taskId,
@@ -120,8 +122,9 @@ export const taskCommentModule = createModule({
         }
       },
 
-      taskComment: async (_: any, { id }: { id: string }) => {
+      taskComment: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           const comment = await TaskComment.findById(id)
             .populate('author')
             .lean();
@@ -137,8 +140,13 @@ export const taskCommentModule = createModule({
         }
       },
 
-      commentReplies: async (_: any, { parentCommentId }: { parentCommentId: string }) => {
+      commentReplies: async (
+        _: any,
+        { parentCommentId }: { parentCommentId: string },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           const replies = await TaskComment.find({
             parentCommentId,
             isDeleted: false
@@ -156,28 +164,37 @@ export const taskCommentModule = createModule({
     },
 
     Mutation: {
-      addTaskComment: async (_: any, { input }: { input: any }) => {
+      addTaskComment: async (_: any, { input }: { input: any }, context: GraphQLContext) => {
         try {
-          // Verify task exists
+          const currentUser = requireCurrentUser(context);
           const task = await Task.findById(input.taskId);
           if (!task) {
             throw new AppError('Task not found', 404);
           }
 
-          // Verify author exists
-          const author = await User.findById(input.authorId).lean();
+          const author = await User.findById(currentUser.userId).lean();
           if (!author) {
             throw new AppError('Author not found', 400);
           }
 
-          // Create comment
+          const rawAttachments = input.attachments || [];
+          const processedAttachments = await Promise.all(
+            rawAttachments.map((att: any) =>
+              processAttachmentForUpload(att, {
+                userId: currentUser.userId,
+                taskId: input.taskId,
+                ip: context.req?.ip,
+              })
+            )
+          );
+
           const comment = new TaskComment({
             taskId: input.taskId,
-            authorId: input.authorId,
+            authorId: currentUser.userId,
             body: input.body,
             parentCommentId: input.parentCommentId,
-            attachments: input.attachments || [],
-            mentions: [], // TODO: Extract mentions from body
+            attachments: processedAttachments,
+            mentions: [],
           });
 
           await comment.save();
@@ -200,8 +217,9 @@ export const taskCommentModule = createModule({
         }
       },
 
-      updateTaskComment: async (_: any, { id, input }: { id: string; input: any }) => {
+      updateTaskComment: async (_: any, { id, input }: { id: string; input: any }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           const comment = await TaskComment.findById(id);
           if (!comment) {
             throw new AppError('Comment not found', 404);
@@ -219,8 +237,9 @@ export const taskCommentModule = createModule({
         }
       },
 
-      deleteTaskComment: async (_: any, { id }: { id: string }) => {
+      deleteTaskComment: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
         try {
+          requireCurrentUser(context);
           const comment = await TaskComment.findById(id);
           if (!comment) {
             throw new AppError('Comment not found', 404);
@@ -244,14 +263,15 @@ export const taskCommentModule = createModule({
         }
       },
 
-      addReaction: async (_: any, { commentId, emoji, userId }: { commentId: string; emoji: string; userId: string }) => {
+      addReaction: async (_: any, { commentId, emoji }: { commentId: string; emoji: string }, context: GraphQLContext) => {
         try {
+          const currentUser = requireCurrentUser(context);
+          const userId = currentUser.userId;
           const comment = await TaskComment.findById(commentId);
           if (!comment) {
             throw new AppError('Comment not found', 404);
           }
 
-          // Get user to get their name
           const user = await User.findById(userId).lean();
           if (!user) {
             throw new AppError('User not found', 400);
@@ -268,8 +288,14 @@ export const taskCommentModule = createModule({
         }
       },
 
-      removeReaction: async (_: any, { commentId, emoji, userId }: { commentId: string; emoji: string; userId: string }) => {
+      removeReaction: async (
+        _: any,
+        { commentId, emoji }: { commentId: string; emoji: string },
+        context: GraphQLContext
+      ) => {
         try {
+          const currentUser = requireCurrentUser(context);
+          const userId = currentUser.userId;
           const comment = await TaskComment.findById(commentId);
           if (!comment) {
             throw new AppError('Comment not found', 404);
@@ -286,20 +312,26 @@ export const taskCommentModule = createModule({
         }
       },
 
-      addCommentAttachment: async (_: any, { commentId, attachment }: { commentId: string; attachment: any }) => {
+      addCommentAttachment: async (
+        _: any,
+        { commentId, attachment }: { commentId: string; attachment: any },
+        context: GraphQLContext
+      ) => {
         try {
+          const currentUser = requireCurrentUser(context);
           const comment = await TaskComment.findById(commentId);
           if (!comment) {
             throw new AppError('Comment not found', 404);
           }
 
-          // Validate file size (5MB limit)
-          const maxSize = 5 * 1024 * 1024; // 5MB in bytes
-          if (attachment.size > maxSize) {
-            throw new AppError('File size exceeds 5MB limit', 400);
-          }
+          const processed = await processAttachmentForUpload(attachment, {
+            userId: currentUser.userId,
+            commentId,
+            taskId: comment.taskId,
+            ip: context.req?.ip,
+          });
 
-          await comment.addAttachment(attachment);
+          await comment.addAttachment(processed);
           await comment.populate('author');
 
           logger.info('Attachment added to comment', { commentId, attachmentName: attachment.name });
@@ -310,8 +342,13 @@ export const taskCommentModule = createModule({
         }
       },
 
-      removeCommentAttachment: async (_: any, { commentId, attachmentName }: { commentId: string; attachmentName: string }) => {
+      removeCommentAttachment: async (
+        _: any,
+        { commentId, attachmentName }: { commentId: string; attachmentName: string },
+        context: GraphQLContext
+      ) => {
         try {
+          requireCurrentUser(context);
           const comment = await TaskComment.findById(commentId);
           if (!comment) {
             throw new AppError('Comment not found', 404);

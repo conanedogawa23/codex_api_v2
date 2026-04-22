@@ -10,9 +10,10 @@ export interface IReaction {
 // Attachment interface for comments
 export interface ICommentAttachment {
   name: string;
-  data: string; // base64 encoded file data
-  type: string; // MIME type
-  size: number; // file size in bytes
+  data?: string;
+  url?: string;
+  type: string;
+  size: number;
 }
 
 // Static method interfaces
@@ -67,7 +68,11 @@ const CommentAttachmentSchema = new Schema({
   },
   data: {
     type: String,
-    required: true
+    required: false
+  },
+  url: {
+    type: String,
+    required: false
   },
   type: {
     type: String,
@@ -201,6 +206,9 @@ TaskCommentSchema.methods.removeReaction = function(emoji: string, userId: strin
 
 // Instance method to add attachment
 TaskCommentSchema.methods.addAttachment = function(attachment: ICommentAttachment) {
+  if (!attachment.data && !attachment.url) {
+    throw new Error('Attachment must have either data or url');
+  }
   this.attachments.push(attachment);
   return this.save();
 };

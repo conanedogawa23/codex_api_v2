@@ -20,6 +20,7 @@ export const baseModule = createModule({
       VIEW_DEPARTMENT_RESOURCE_UTILIZATION
       VIEW_PLATFORM_COST_REPORTS
       DOWNLOAD_PLATFORM_COST_REPORTS
+      MANAGE_PLATFORM_FINANCE_RATES
     }
 
     type Query {

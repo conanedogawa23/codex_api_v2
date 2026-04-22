@@ -58,3 +58,11 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+/*
+ * Alert runbook (map log queries to your stack: ELK / Datadog / CloudWatch):
+ * - graphql_operation: rate by ip where userId is null > 100/min from one IP (abuse / scraping).
+ * - graphql_operation: high cardinality of distinct userId per actor (service account) in 5m (enumeration).
+ * - Winston auth/OTP logs: verifyOTP failures per email > 5 / 15m (credential stuffing); tune via mail provider metrics too.
+ * - HTTP 401 on /jobs/* or missing X-Service-Token (see request logger / access logs).
+ */
+

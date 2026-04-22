@@ -4,6 +4,7 @@ import { Task } from '../../../models/Task';
 import { User } from '../../../models/User';
 import { AppError } from '../../../middleware';
 import { GraphQLContext, requireCurrentUser } from '../../../utils/auth';
+import { processAttachmentForUpload } from '../../../utils/fileProcessor';
 import { canMutateTasks } from '../../../utils/accessControl';
 import { logger } from '../../../utils/logger';
 import {
@@ -1083,19 +1084,19 @@ export const taskModule = createModule({
 
           await requireTaskRecordMutationAccess(context, task);
 
-          // Validate file size (5MB limit for base64)
-          const maxSize = 5 * 1024 * 1024; // 5MB in bytes
-          if (attachment.size && attachment.size > maxSize) {
-            throw new AppError('File size exceeds 5MB limit', 400);
-          }
+          const currentUser = requireCurrentUser(context);
+          const processed = await processAttachmentForUpload(attachment, {
+            userId: currentUser.userId,
+            taskId,
+            ip: context.req?.ip,
+          });
 
-          // Check total attachments size (20MB limit per task)
           const totalSize = task.attachments.reduce((sum: number, att: any) => sum + (att.size || 0), 0);
-          if (totalSize + (attachment.size || 0) > 20 * 1024 * 1024) {
+          if (totalSize + processed.size > 20 * 1024 * 1024) {
             throw new AppError('Total attachments size exceeds 20MB limit', 400);
           }
 
-          await task.addAttachment(attachment);
+          await task.addAttachment(processed);
 
           logger.info('Attachment added to task', { taskId, attachmentName: attachment.name });
           return task;

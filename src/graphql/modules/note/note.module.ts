@@ -48,7 +48,7 @@ export const noteModule = createModule({
     }
 
     extend type Mutation {
-      resolveNote(id: ID!, userId: ID!): Note!
+      resolveNote(id: ID!): Note!
       unresolveNote(id: ID!): Note!
     }
   `,
@@ -122,7 +122,10 @@ export const noteModule = createModule({
         { authorId, limit, offset }: { authorId: string; limit: number; offset: number },
         context: GraphQLContext
       ) => {
-        requireCurrentUser(context);
+        const currentUser = requireCurrentUser(context);
+        if (authorId !== currentUser.userId && !currentUser.isSuperAdmin) {
+          throw new AppError('Forbidden', 403);
+        }
         logger.info('Fetching notes by author', { authorId, limit, offset });
 
         const filter = await withProjectFilter(
@@ -167,11 +170,12 @@ export const noteModule = createModule({
     },
 
     Mutation: {
-      resolveNote: async (_: any, { id, userId }: { id: string; userId: string }) => {
-        logger.info('Resolving note', { id, userId });
-        
+      resolveNote: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        const currentUser = requireCurrentUser(context);
+        logger.info('Resolving note', { id, userId: currentUser.userId });
+
         const note = await Note.findById(id);
-        
+
         if (!note) {
           throw new AppError(`Note with ID ${id} not found`, 404);
         }
@@ -184,7 +188,7 @@ export const noteModule = createModule({
           throw new AppError('Note is already resolved', 400);
         }
 
-        await note.resolve(new mongoose.Types.ObjectId(userId));
+        await note.resolve(new mongoose.Types.ObjectId(currentUser.userId));
         
         const updatedNote = await Note.findById(id).lean();
         
@@ -192,7 +196,8 @@ export const noteModule = createModule({
         return updatedNote!;
       },
 
-      unresolveNote: async (_: any, { id }: { id: string }) => {
+      unresolveNote: async (_: any, { id }: { id: string }, context: GraphQLContext) => {
+        requireCurrentUser(context);
         logger.info('Unresolving note', { id });
         
         const note = await Note.findById(id);

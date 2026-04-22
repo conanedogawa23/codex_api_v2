@@ -31,7 +31,10 @@ import { attachmentModule } from './modules/attachment/attachment.module';
 import { wikiPageModule } from './modules/wikiPage/wikiPage.module';
 import { draftNoteModule } from './modules/draftNote/draftNote.module';
 import { analyticsModule } from './modules/analytics/analytics.module';
+import { financeModule } from './modules/finance/finance.module';
 import { superAdminModule } from './modules/superAdmin/superAdmin.module';
+
+export { IMPERSONATION_INPUT_AUDIT } from './penTestImpersonationAudit';
 
 export const application = createApplication({
   modules: [
@@ -66,6 +69,7 @@ export const application = createApplication({
     wikiPageModule,
     draftNoteModule,
     analyticsModule,
+    financeModule,
     superAdminModule,
   ],
 });
